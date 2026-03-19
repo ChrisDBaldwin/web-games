@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Snowball Downhill</title>
+<style>
+* { margin: 0; padding: 0; }
+body { background: #1a1a2e; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: monospace; }
+canvas { display: block; border-radius: 4px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+canvas.width = 960;
+canvas.height = 540;
+
+let state = 'title';
+let cameraX = 0;
+let cameraY = 0;
+let distance = 0;
+let bestDistance = 0;
+
+const SEGMENT_W = 6;
+const terrain = [];
+let terrainGenerated = 0;
+
+function generateTerrain(upToX) {
+  while (terrainGenerated < upToX + canvas.width * 2) {
+    const i = terrain.length;
+    const x = i * SEGMENT_W;
+    const progress = x / 5000;
+
+    // Strong consistent downhill slope that increases with progress
+    const baseSlope = 0.06 + progress * 0.03;
+    const baseY = 200 + x * baseSlope;
+
+    // Rolling bumps that NEVER create net uphills — only vary the steepness
+    // Use asymmetric waves: steep drops + gentle rises
+    const wave1 = Math.sin(x * 0.004) * 20 - Math.abs(Math.sin(x * 0.004)) * 8;
+    const wave2 = Math.sin(x * 0.009 + 2) * 12 - Math.abs(Math.sin(x * 0.009 + 2)) * 5;
+    const bump = Math.sin(x * 0.03) * 4;
+
+    // Occasional steeper drops (fun fast sections)
+    const dropZone = Math.max(0, Math.sin(x * 0.0015) - 0.6) * 80;
+
+    const y = baseY + wave1 + wave2 + bump - dropZone;
+    terrain.push({ x, y: Math.min(y, 3000) });
+    terrainGenerated = x;
+  }
+}
+
+function getTerrainY(x) {
+  const idx = Math.floor(x / SEGMENT_W);
+  if (idx < 0) return terrain[0]?.y || 300;
+  if (idx >= terrain.length - 1) return terrain[terrain.length - 1]?.y || 300;
+  const t = (x - idx * SEGMENT_W) / SEGMENT_W;
+  return terrain[idx].y * (1 - t) + terrain[idx + 1].y * t;
+}
+
+function getTerrainAngle(x) {
+  const dx = SEGMENT_W;
+  const dy = getTerrainY(x + dx) - getTerrainY(x - dx);
+  return Math.atan2(dy, dx * 2);
+}
+
+let snowPatches = [];
+let snowGenerated = 0;
+
+function generateSnow(upToX) {
+  while (snowGenerated < upToX + canvas.width * 2) {
+    const x = snowGenerated + 30 + Math.random() * 80;
+    const progress = x / 5000;
+    const sparsity = 1 + progress * 2;
+    if (Math.random() < 0.7 / sparsity) {
+      const ty = getTerrainY(x);
+      snowPatches.push({ x, y: ty - 3, radius: 4 + Math.random() * 6, collected: false });
+    }
+    snowGenerated = x;
+  }
+}
+
+const ball = {
+  x: 80, y: 200, vx: 0, vy: 0, radius: 12, mass: 1,
+  onGround: false, angularPos: 0, trail: []
+};
+
+let particles = [];
+
+function spawnParticles(x, y, count, color) {
+  for (let i = 0; i < count; i++) {
+    particles.push({
+      x, y, vx: (Math.random() - 0.5) * 4, vy: -Math.random() * 3 - 1,
+      life: 30 + Math.random() * 30, maxLife: 60,
+      radius: 1 + Math.random() * 2, color
+    });
+  }
+}
+
+const keys = {};
+window.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
+  if ((state === 'title' || state === 'gameover') && (e.code === 'Space' || e.code === 'Enter')) startGame();
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+function startGame() {
+  state = 'playing';
+  terrain.length = 0;
+  terrainGenerated = 0;
+  snowPatches = [];
+  snowGenerated = 0;
+  particles = [];
+  cameraX = 0;
+  cameraY = 0;
+  distance = 0;
+  ball.x = 80; ball.y = 100; ball.vx = 1; ball.vy = 0;
+  ball.radius = 12; ball.mass = 1; ball.onGround = false; ball.trail = [];
+  generateTerrain(canvas.width * 3);
+  generateSnow(canvas.width * 3);
+}
+
+const GRAVITY = 0.4;
+const FRICTION = 0.992;
+let stuckTimer = 0;
+
+function updateBall() {
+  const angle = getTerrainAngle(ball.x);
+  const terrainY = getTerrainY(ball.x);
+  const surfaceY = terrainY - ball.radius;
+
+  ball.vy += GRAVITY;
+
+  // Controls: lean forward/back and tuck
+  const leanRight = keys['ArrowRight'] || keys['KeyD'];
+  const leanLeft = keys['ArrowLeft'] || keys['KeyA'];
+  const tucking = keys['ArrowDown'] || keys['KeyS'];
+
+  if (ball.onGround) {
+    // Gravity along slope — the main driving force
+    const slopeForce = Math.sin(angle) * GRAVITY * 2.8;
+    ball.vx += slopeForce * (1 + ball.mass * 0.08);
+
+    // Lean forward: small push + less friction (shift weight downhill)
+    if (leanRight) {
+      ball.vx += 0.15 * (1 + ball.mass * 0.02);
+    }
+    // Lean back: gentle braking
+    if (leanLeft) {
+      ball.vx *= 0.97;
+    }
+
+    // Tuck: reduce friction significantly (crouch for speed)
+    const frictionMul = tucking ? 0.999 : FRICTION;
+    ball.vx *= frictionMul;
+
+    // Minimum speed nudge — gravity should always win on a downhill
+    if (ball.vx > 0 && ball.vx < 0.5 && Math.sin(angle) > 0.02) {
+      ball.vx += 0.05;
+    }
+
+    ball.y = surfaceY;
+    ball.vy = 0;
+    ball.angularPos += ball.vx / ball.radius;
+
+    if (Math.abs(ball.vx) > 3 && Math.random() < 0.4) {
+      spawnParticles(ball.x - ball.vx * 0.5, ball.y + ball.radius, 1, '#d4d8e8');
+    }
+  } else {
+    // Airborne: slight air control
+    if (leanRight) ball.vx += 0.05;
+    if (leanLeft) ball.vx -= 0.05;
+  }
+
+  ball.x += ball.vx;
+  ball.y += ball.vy;
+
+  const newTerrainY = getTerrainY(ball.x);
+  const newSurfaceY = newTerrainY - ball.radius;
+
+  if (ball.y >= newSurfaceY) {
+    ball.y = newSurfaceY;
+    if (!ball.onGround) {
+      const impact = Math.abs(ball.vy);
+      if (impact > 3) spawnParticles(ball.x, ball.y + ball.radius, Math.floor(impact * 2), '#e8e8f0');
+      const landAngle = getTerrainAngle(ball.x);
+      // Convert vertical momentum into horizontal on landing
+      ball.vx += ball.vy * Math.sin(landAngle) * 0.6;
+    }
+    ball.vy = 0;
+    ball.onGround = true;
+  } else {
+    ball.onGround = false;
+  }
+
+  for (const patch of snowPatches) {
+    if (patch.collected) continue;
+    const dx = ball.x - patch.x;
+    const dy = ball.y - patch.y;
+    if (Math.sqrt(dx * dx + dy * dy) < ball.radius + patch.radius) {
+      patch.collected = true;
+      const growth = patch.radius * 0.15;
+      ball.radius += growth;
+      ball.mass += growth * 0.3;
+      spawnParticles(patch.x, patch.y, 6, '#fff');
+    }
+  }
+
+  if (ball.onGround && Math.random() < 0.3) {
+    ball.trail.push({ x: ball.x, y: newTerrainY, age: 0 });
+    if (ball.trail.length > 200) ball.trail.shift();
+  }
+
+  distance = Math.max(distance, Math.floor(ball.x / 10));
+
+  // Game over: stuck with very low speed for too long
+  if (ball.vx < 0.1 && ball.onGround && ball.x > 200) {
+    stuckTimer++;
+    if (stuckTimer > 90) {
+      bestDistance = Math.max(bestDistance, distance);
+      state = 'gameover';
+      stuckTimer = 0;
+    }
+  } else {
+    stuckTimer = 0;
+  }
+
+  const targetCamX = ball.x - canvas.width * 0.3;
+  cameraX += (targetCamX - cameraX) * 0.08;
+
+  const targetCamY = ball.y - canvas.height * 0.4;
+  cameraY += (targetCamY - cameraY) * 0.08;
+}
+
+function updateParticles() {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx; p.y += p.vy; p.vy += 0.05; p.life--;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+
+function drawSky() {
+  const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  grad.addColorStop(0, '#0f0f23');
+  grad.addColorStop(0.4, '#1a1a3e');
+  grad.addColorStop(0.7, '#2d2d5e');
+  grad.addColorStop(1, '#3d3d6e');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  for (let i = 0; i < 80; i++) {
+    const sx = ((i * 137.5 + 42) % canvas.width + cameraX * 0.05 * (i % 3 + 1) * 0.1) % canvas.width;
+    const sy = (i * 97.3 + 84) % (canvas.height * 0.5);
+    const brightness = 0.3 + (Math.sin(Date.now() * 0.001 + i) * 0.2 + 0.2);
+    ctx.fillStyle = `rgba(255,255,255,${brightness})`;
+    ctx.fillRect(sx, sy, 1.5, 1.5);
+  }
+
+  ctx.fillStyle = '#e8e8c8';
+  ctx.beginPath();
+  ctx.arc(canvas.width * 0.8 - cameraX * 0.01, 60, 25, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#0f0f23';
+  ctx.beginPath();
+  ctx.arc(canvas.width * 0.8 - cameraX * 0.01 + 8, 55, 20, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawMountains() {
+  ctx.fillStyle = '#1a1a40';
+  ctx.beginPath();
+  ctx.moveTo(0, canvas.height);
+  for (let x = 0; x <= canvas.width; x += 20) {
+    const wx = x + cameraX * 0.05;
+    ctx.lineTo(x, canvas.height * 0.45 + Math.sin(wx * 0.003) * 50 + Math.sin(wx * 0.008) * 25);
+  }
+  ctx.lineTo(canvas.width, canvas.height);
+  ctx.fill();
+
+  ctx.fillStyle = '#222250';
+  ctx.beginPath();
+  ctx.moveTo(0, canvas.height);
+  for (let x = 0; x <= canvas.width; x += 15) {
+    const wx = x + cameraX * 0.15;
+    ctx.lineTo(x, canvas.height * 0.55 + Math.sin(wx * 0.005) * 40 + Math.sin(wx * 0.012) * 20);
+  }
+  ctx.lineTo(canvas.width, canvas.height);
+  ctx.fill();
+}
+
+function drawTerrain() {
+  const startIdx = Math.max(0, Math.floor((cameraX - 50) / SEGMENT_W));
+  const endIdx = Math.min(terrain.length - 1, Math.ceil((cameraX + canvas.width + 50) / SEGMENT_W));
+
+  const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  grad.addColorStop(0, '#e8e8f8');
+  grad.addColorStop(0.3, '#d0d4e8');
+  grad.addColorStop(1, '#a0a4c0');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.moveTo(terrain[startIdx].x - cameraX, terrain[startIdx].y - cameraY);
+  for (let i = startIdx; i <= endIdx; i++) ctx.lineTo(terrain[i].x - cameraX, terrain[i].y - cameraY);
+  ctx.lineTo(terrain[endIdx].x - cameraX, canvas.height + 50);
+  ctx.lineTo(terrain[startIdx].x - cameraX, canvas.height + 50);
+  ctx.fill();
+
+  ctx.strokeStyle = '#f0f0ff';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(terrain[startIdx].x - cameraX, terrain[startIdx].y - cameraY);
+  for (let i = startIdx; i <= endIdx; i++) ctx.lineTo(terrain[i].x - cameraX, terrain[i].y - cameraY);
+  ctx.stroke();
+
+  ctx.strokeStyle = 'rgba(150, 155, 180, 0.15)';
+  ctx.lineWidth = 1;
+  for (let offset = 15; offset < 200; offset += 20) {
+    ctx.beginPath();
+    for (let i = startIdx; i <= endIdx; i++) {
+      const method = i === startIdx ? 'moveTo' : 'lineTo';
+      ctx[method](terrain[i].x - cameraX, terrain[i].y - cameraY + offset);
+    }
+    ctx.stroke();
+  }
+}
+
+function drawSnowPatches() {
+  for (const patch of snowPatches) {
+    if (patch.collected) continue;
+    const sx = patch.x - cameraX;
+    const sy = patch.y - cameraY;
+    if (sx < -20 || sx > canvas.width + 20) continue;
+    ctx.fillStyle = '#fff';
+    ctx.globalAlpha = 0.9;
+    ctx.beginPath();
+    ctx.arc(sx, sy, patch.radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#f8f8ff';
+    ctx.globalAlpha = 0.5 + Math.sin(Date.now() * 0.005 + patch.x) * 0.3;
+    ctx.beginPath();
+    ctx.arc(sx - patch.radius * 0.3, sy - patch.radius * 0.3, patch.radius * 0.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawBall() {
+  const sx = ball.x - cameraX;
+  const sy = ball.y - cameraY;
+  const terrainY = getTerrainY(ball.x) - cameraY;
+
+  ctx.fillStyle = 'rgba(30, 30, 60, 0.3)';
+  ctx.beginPath();
+  ctx.ellipse(sx, terrainY + 2, ball.radius * 0.8, ball.radius * 0.25, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  const ballGrad = ctx.createRadialGradient(sx - ball.radius * 0.3, sy - ball.radius * 0.3, ball.radius * 0.1, sx, sy, ball.radius);
+  ballGrad.addColorStop(0, '#ffffff');
+  ballGrad.addColorStop(0.5, '#e0e4f0');
+  ballGrad.addColorStop(1, '#b8bcd0');
+  ctx.fillStyle = ballGrad;
+  ctx.beginPath();
+  ctx.arc(sx, sy, ball.radius, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = 'rgba(180, 184, 200, 0.3)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 3; i++) {
+    const a = ball.angularPos + (i * Math.PI * 2) / 3;
+    const lx = Math.cos(a) * ball.radius * 0.6;
+    const ly = Math.sin(a) * ball.radius * 0.6;
+    ctx.beginPath();
+    ctx.arc(sx + lx * 0.3, sy + ly * 0.3, ball.radius * 0.4, a, a + 1);
+    ctx.stroke();
+  }
+
+  ctx.strokeStyle = 'rgba(200, 204, 220, 0.5)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(sx, sy, ball.radius, 0, Math.PI * 2);
+  ctx.stroke();
+}
+
+function drawTrail() {
+  for (const t of ball.trail) {
+    const sx = t.x - cameraX;
+    if (sx < -10 || sx > canvas.width + 10) continue;
+    t.age++;
+    const alpha = Math.max(0, 0.3 - t.age * 0.003);
+    ctx.fillStyle = `rgba(180, 185, 210, ${alpha})`;
+    ctx.fillRect(sx - 2, t.y - cameraY - 1, 4, 2);
+  }
+}
+
+function drawParticles() {
+  for (const p of particles) {
+    const sx = p.x - cameraX;
+    const sy = p.y - cameraY;
+    ctx.fillStyle = p.color;
+    ctx.globalAlpha = p.life / p.maxLife;
+    ctx.beginPath();
+    ctx.arc(sx, sy, p.radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawHUD() {
+  ctx.fillStyle = '#e8e8f0';
+  ctx.font = '16px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText(`${distance}m`, 20, 30);
+
+  const sizeLabel = ball.radius < 15 ? 'smol' : ball.radius < 25 ? 'round' : ball.radius < 40 ? 'chunky' : ball.radius < 60 ? 'BOULDER' : 'ABSOLUTE UNIT';
+  ctx.fillStyle = '#a8a8c0';
+  ctx.font = '12px monospace';
+  ctx.fillText(sizeLabel, 20, 50);
+
+  const barW = 100, barH = 4;
+  const fill = Math.min(1, ball.radius / 80);
+  ctx.fillStyle = 'rgba(255,255,255,0.1)';
+  ctx.fillRect(20, 56, barW, barH);
+  ctx.fillStyle = `hsl(${200 + fill * 40}, 60%, ${60 + fill * 20}%)`;
+  ctx.fillRect(20, 56, barW * fill, barH);
+
+  const speed = Math.abs(ball.vx);
+  const speedLabel = speed < 2 ? 'crawling...' : speed < 5 ? 'rolling' : speed < 10 ? 'cruising' : speed < 15 ? 'FAST' : 'BLAZING';
+  ctx.fillStyle = speed < 2 ? '#ff6666' : '#a8a8c0';
+  ctx.fillText(speedLabel, 20, 78);
+}
+
+const snowflakes = [];
+for (let i = 0; i < 60; i++) {
+  snowflakes.push({
+    x: Math.random() * canvas.width, y: Math.random() * canvas.height,
+    vx: -0.5 + Math.random() * 0.3, vy: 0.5 + Math.random() * 1,
+    radius: 0.5 + Math.random() * 1.5
+  });
+}
+
+function drawSnowfall() {
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  for (const s of snowflakes) {
+    s.x += s.vx; s.y += s.vy;
+    if (s.y > canvas.height) { s.y = -5; s.x = Math.random() * canvas.width; }
+    if (s.x < 0) s.x = canvas.width;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, s.radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawTitle() {
+  drawSky();
+  drawMountains();
+  if (terrain.length === 0) { generateTerrain(canvas.width * 2); generateSnow(canvas.width * 2); }
+  drawTerrain();
+  drawSnowfall();
+
+  ctx.fillStyle = '#e8e8f0';
+  ctx.font = 'bold 36px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('SNOWBALL', canvas.width / 2, canvas.height * 0.3);
+
+  ctx.font = '14px monospace';
+  ctx.fillStyle = '#a8a8c0';
+  ctx.fillText('roll downhill. collect snow. get massive.', canvas.width / 2, canvas.height * 0.3 + 40);
+  ctx.fillText('the hills get steeper -- you gotta be big to keep up', canvas.width / 2, canvas.height * 0.3 + 62);
+
+  ctx.fillStyle = '#8888aa';
+  ctx.fillText('← lean back  |  → lean forward  |  ↓ tuck for speed', canvas.width / 2, canvas.height * 0.3 + 100);
+  ctx.fillText('(or A / D / S)', canvas.width / 2, canvas.height * 0.3 + 120);
+
+  const pulse = 0.5 + Math.sin(Date.now() * 0.003) * 0.3;
+  ctx.fillStyle = `rgba(232, 232, 240, ${pulse})`;
+  ctx.font = '16px monospace';
+  ctx.fillText('press SPACE to roll', canvas.width / 2, canvas.height * 0.3 + 160);
+}
+
+function drawGameOver() {
+  ctx.fillStyle = 'rgba(15, 15, 35, 0.6)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.fillStyle = '#e8e8f0';
+  ctx.font = 'bold 28px monospace';
+  ctx.textAlign = 'center';
+  const msg = ball.radius > 50 ? 'MASSIVE.' : ball.radius > 30 ? 'not bad!' : 'too smol...';
+  ctx.fillText(msg, canvas.width / 2, canvas.height * 0.35);
+
+  ctx.font = '16px monospace';
+  ctx.fillStyle = '#a8a8c0';
+  ctx.fillText(`distance: ${distance}m`, canvas.width / 2, canvas.height * 0.35 + 40);
+  ctx.fillText(`best: ${bestDistance}m`, canvas.width / 2, canvas.height * 0.35 + 65);
+  ctx.fillText(`final size: ${ball.radius.toFixed(1)}`, canvas.width / 2, canvas.height * 0.35 + 90);
+
+  const pulse = 0.5 + Math.sin(Date.now() * 0.003) * 0.3;
+  ctx.fillStyle = `rgba(232, 232, 240, ${pulse})`;
+  ctx.fillText('press SPACE to retry', canvas.width / 2, canvas.height * 0.35 + 140);
+}
+
+function frame() {
+  if (state === 'playing') {
+    generateTerrain(cameraX + canvas.width * 3);
+    generateSnow(cameraX + canvas.width * 3);
+    updateBall();
+    updateParticles();
+  }
+
+  if (state === 'title') {
+    drawTitle();
+  } else {
+    drawSky();
+    drawMountains();
+    drawTerrain();
+    drawTrail();
+    drawSnowPatches();
+    drawParticles();
+    drawBall();
+    drawSnowfall();
+    drawHUD();
+    if (state === 'gameover') drawGameOver();
+  }
+
+  requestAnimationFrame(frame);
+}
+
+frame();
+</script>
+</body>
+</html>
