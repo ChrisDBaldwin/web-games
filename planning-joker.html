@@ -1,0 +1,1630 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Planning Joker</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Permanent+Marker&family=Inter:wght@400;600;700;900&display=swap');
+
+*{margin:0;padding:0;box-sizing:border-box}
+
+:root{
+  --bg:#0a0a1a;--panel:#16213e;--card:#1a1a2e;
+  --gold:#f4d03f;--red:#e74c3c;--green:#2ecc71;--blue:#3498db;--purple:#9b59b6;--orange:#e67e22;
+  --light:#ecf0f1;--dim:#7f8c8d;
+  --shadow:0 4px 15px rgba(0,0,0,.4);
+}
+
+body{background:var(--bg);color:var(--light);font-family:'Inter',sans-serif;overflow-x:hidden;min-height:100vh}
+
+/* ── SHARED ── */
+.screen{display:none !important;min-height:100vh;padding:1.5rem}
+.screen.active{display:flex !important;flex-direction:column;align-items:center}
+.screen-center.active{justify-content:center}
+
+h1.title{font-family:'Permanent Marker',cursive;font-size:4.5rem;color:var(--gold);text-shadow:0 0 40px rgba(244,208,63,.3),0 4px 0 #b8860b;animation:float 3s ease-in-out infinite}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+
+.subtitle{font-size:1.1rem;color:var(--dim);font-style:italic;margin-bottom:2rem}
+
+.btn{padding:.9rem 2.5rem;font-size:1.2rem;font-weight:700;border:none;border-radius:12px;cursor:pointer;transition:all .2s;font-family:'Inter',sans-serif;text-transform:uppercase;letter-spacing:2px}
+.btn:hover{transform:translateY(-2px);box-shadow:0 6px 20px rgba(0,0,0,.4)}
+.btn:active{transform:translateY(0)}
+.btn-gold{background:linear-gradient(135deg,var(--gold),var(--orange));color:#1a1a2e}
+.btn-dim{background:linear-gradient(135deg,#333,#222);color:var(--dim);border:2px solid #555;font-size:1rem;padding:.7rem 2rem}
+.btn-green{background:linear-gradient(135deg,var(--green),#1a9c5a);color:#fff}
+.btn-red{background:linear-gradient(135deg,var(--red),#c0392b);color:#fff}
+.btn-sm{padding:.5rem 1.2rem;font-size:.85rem}
+.btn:disabled{opacity:.3;cursor:not-allowed;transform:none}
+
+.gap-sm{gap:.5rem}.gap-md{gap:1rem}.gap-lg{gap:1.5rem}
+.row{display:flex;align-items:center}.col{display:flex;flex-direction:column}
+.center{text-align:center}
+.mt-1{margin-top:.5rem}.mt-2{margin-top:1rem}.mt-3{margin-top:1.5rem}
+
+/* ── TITLE SCREEN ── */
+#title .preview-cards{display:flex;gap:1rem;margin-bottom:2rem}
+#title .preview-card{width:70px;height:100px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:1.8rem;font-weight:900;box-shadow:var(--shadow)}
+#title .preview-card:nth-child(1){background:linear-gradient(135deg,#e74c3c,#c0392b);transform:rotate(-12deg)}
+#title .preview-card:nth-child(2){background:linear-gradient(135deg,#3498db,#2980b9);transform:rotate(-4deg)}
+#title .preview-card:nth-child(3){background:linear-gradient(135deg,#f4d03f,#f39c12);transform:rotate(4deg)}
+#title .preview-card:nth-child(4){background:linear-gradient(135deg,#2ecc71,#27ae60);transform:rotate(12deg)}
+
+/* ── CHARACTER SELECT ── */
+.char-grid{display:flex;gap:1.5rem;flex-wrap:wrap;justify-content:center;margin-top:1.5rem}
+.char-card{width:180px;padding:1.5rem 1rem;border-radius:16px;text-align:center;cursor:pointer;border:3px solid #333;transition:all .25s;background:var(--panel);position:relative;overflow:hidden}
+.char-card:hover{border-color:var(--gold);transform:translateY(-6px)}
+.char-card.selected{border-color:var(--gold);box-shadow:0 0 25px rgba(244,208,63,.3)}
+.char-card.locked{cursor:default;filter:brightness(.6)}
+.char-card.locked:hover{border-color:#555;transform:none}
+.char-icon{font-size:3rem;margin-bottom:.5rem}
+.char-name{font-weight:900;font-size:1.1rem;margin-bottom:.3rem}
+.char-trait{font-size:.75rem;color:var(--dim);line-height:1.3}
+.char-unlock{font-size:.65rem;color:var(--gold);margin-top:.5rem;font-weight:600}
+.locked-overlay{position:absolute;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;font-size:3rem}
+.char-card.locked .char-icon{filter:brightness(0)}
+
+/* ── BACKLOG SCREEN ── */
+.epic-card{background:linear-gradient(135deg,#2c2c54,#1a1a3e);border:3px solid var(--purple);border-radius:16px;padding:1.5rem 2rem;text-align:center;max-width:500px;width:100%;margin-bottom:2rem;position:relative}
+.epic-card.boss-ready{border-color:var(--gold);box-shadow:0 0 30px rgba(244,208,63,.3);cursor:pointer}
+.epic-card.boss-ready:hover{transform:scale(1.02)}
+.epic-card.completed{border-color:var(--green);opacity:.7}
+.epic-label{font-size:.7rem;text-transform:uppercase;letter-spacing:2px;color:var(--purple);margin-bottom:.3rem}
+.epic-name{font-family:'Permanent Marker',cursive;font-size:1.8rem;color:var(--light);margin-bottom:.3rem}
+.epic-theme{font-size:.85rem;color:var(--dim)}
+.epic-points{font-family:'Permanent Marker',cursive;font-size:2rem;color:var(--red);margin-top:.5rem}
+
+.ticket-row{display:flex;gap:1.2rem;justify-content:center;flex-wrap:wrap;margin-bottom:2rem}
+.ticket-card{width:170px;padding:1.2rem;border-radius:12px;text-align:center;border:2px solid #444;background:var(--card);transition:all .25s;position:relative}
+.ticket-card.available{cursor:pointer;border-color:var(--blue)}
+.ticket-card.available:hover{border-color:var(--gold);transform:translateY(-4px)}
+.ticket-card.locked{opacity:.4;cursor:default}
+.ticket-card.done{border-color:var(--green);opacity:.7}
+.ticket-type{font-size:.65rem;text-transform:uppercase;letter-spacing:1px;color:var(--dim)}
+.ticket-name{font-weight:700;font-size:.9rem;margin:.3rem 0}
+.ticket-pts{font-family:'Permanent Marker',cursive;font-size:1.6rem}
+.pts-high{color:var(--red)}.pts-med{color:var(--orange)}.pts-low{color:var(--green)}.pts-perfect{color:var(--gold)}
+.ticket-status{font-size:.7rem;margin-top:.3rem;font-weight:600}
+.ticket-number{position:absolute;top:-10px;left:-10px;width:28px;height:28px;border-radius:50%;background:var(--blue);display:flex;align-items:center;justify-content:center;font-weight:900;font-size:.85rem}
+
+/* ── BATTLE SCREEN ── */
+.battle-hud{display:grid;grid-template-columns:1fr auto 1fr;gap:1rem;width:100%;max-width:900px;margin-bottom:1rem;align-items:start}
+.hud-meters{display:flex;flex-direction:column;gap:.4rem}
+.meter-box{background:#111;border-radius:8px;padding:.4rem .8rem;border:1px solid #333}
+.meter-label{display:flex;justify-content:space-between;font-size:.75rem;font-weight:600;margin-bottom:3px}
+.meter-bar{height:10px;background:#222;border-radius:5px;overflow:hidden}
+.meter-fill{height:100%;border-radius:5px;transition:width .5s ease}
+.meter-morale{background:linear-gradient(90deg,var(--red),var(--green))}
+.meter-sat{background:linear-gradient(90deg,var(--red),var(--blue))}
+
+.hud-info{text-align:center}
+.hud-sprint{font-family:'Permanent Marker',cursive;font-size:1.3rem;color:var(--gold)}
+.hud-ticket{font-size:.8rem;color:var(--dim)}
+
+.hud-stats .stat{background:var(--panel);border-radius:8px;padding:.3rem .8rem;display:flex;justify-content:space-between;font-size:.85rem;border:1px solid #333;margin-bottom:.3rem}
+.stat-val{font-weight:900;color:var(--gold)}
+
+.battle-target{background:var(--panel);border-radius:12px;padding:1.5rem;border:2px solid #444;width:100%;max-width:900px;text-align:center;margin-bottom:1rem}
+.battle-target.boss{border-color:var(--purple);background:linear-gradient(135deg,#2c1654,#1a1a3e)}
+.target-label{font-size:.75rem;text-transform:uppercase;letter-spacing:2px;color:var(--dim);margin-bottom:.5rem}
+.target-name{font-weight:700;font-size:1.2rem;margin-bottom:.3rem}
+.target-type{font-size:.7rem;color:var(--dim)}
+.target-points{font-family:'Permanent Marker',cursive;font-size:3.5rem;transition:all .3s}
+.target-original{font-size:.8rem;color:var(--dim);margin-top:.2rem}
+
+.boss-phases{display:flex;gap:1rem;justify-content:center;margin-top:1rem}
+.boss-phase{background:rgba(0,0,0,.3);border-radius:8px;padding:.5rem 1rem;border:2px solid #555;min-width:100px}
+.boss-phase.active-phase{border-color:var(--gold);box-shadow:0 0 15px rgba(244,208,63,.2)}
+.boss-phase.done-phase{border-color:var(--green);opacity:.6}
+.phase-label{font-size:.65rem;color:var(--dim);text-transform:uppercase}
+.phase-pts{font-family:'Permanent Marker',cursive;font-size:1.4rem}
+
+.boss-plays-left{font-size:.9rem;color:var(--orange);margin-top:.8rem;font-weight:700}
+
+.applied-skills{display:flex;gap:.4rem;flex-wrap:wrap;justify-content:center;min-height:24px;margin-bottom:.5rem}
+.applied-tag{background:rgba(244,208,63,.15);border:1px solid var(--gold);color:var(--gold);padding:2px 10px;border-radius:20px;font-size:.7rem;font-weight:600}
+
+.passive-area{margin-bottom:.5rem;text-align:center}
+.passive-label{font-size:.7rem;color:var(--dim);text-transform:uppercase;letter-spacing:1px}
+.passive-list{display:flex;gap:.3rem;flex-wrap:wrap;justify-content:center;margin-top:.2rem}
+.passive-tag{background:rgba(155,89,182,.2);border:1px solid var(--purple);color:#bb8fce;padding:2px 8px;border-radius:12px;font-size:.65rem;font-weight:600}
+
+/* Hand */
+.hand-area{width:100%;max-width:900px;margin-bottom:1rem}
+.hand-header{display:flex;justify-content:space-between;font-size:.8rem;color:var(--dim);text-transform:uppercase;letter-spacing:1px;margin-bottom:.6rem}
+.hand{display:flex;gap:.7rem;justify-content:center;flex-wrap:wrap;perspective:1000px}
+
+.skill-card{width:120px;height:170px;border-radius:10px;padding:.7rem;cursor:pointer;transition:all .25s;display:flex;flex-direction:column;justify-content:space-between;border:2px solid rgba(255,255,255,.1);box-shadow:var(--shadow);position:relative}
+.skill-card:hover{transform:translateY(-12px) scale(1.05);z-index:10}
+.skill-card.selected{transform:translateY(-16px) scale(1.08);z-index:10;border-color:#fff;box-shadow:0 0 25px rgba(255,255,255,.3)}
+.skill-card.disabled{opacity:.4;pointer-events:none}
+.skill-card.common{background:linear-gradient(135deg,#2c3e50,#34495e)}
+.skill-card.uncommon{background:linear-gradient(135deg,#27ae60,#1e8449)}
+.skill-card.rare{background:linear-gradient(135deg,#2980b9,#1a5276)}
+.skill-card.epic{background:linear-gradient(135deg,#8e44ad,#6c3483)}
+.skill-card.legendary{background:linear-gradient(135deg,#f39c12,#d4ac0d);color:#1a1a2e}
+.sk-rarity{font-size:.55rem;text-transform:uppercase;letter-spacing:2px;opacity:.8}
+.sk-icon{font-size:1.8rem;text-align:center}
+.sk-name{font-weight:700;font-size:.7rem;text-align:center;line-height:1.2}
+.sk-desc{font-size:.55rem;text-align:center;opacity:.8;line-height:1.2}
+.sk-cost{position:absolute;top:-8px;right:-8px;background:var(--gold);color:#1a1a2e;width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:.75rem}
+
+.action-bar{display:flex;justify-content:center;gap:.8rem;flex-wrap:wrap;width:100%;max-width:900px}
+
+/* Log */
+.log{background:rgba(0,0,0,.3);border-radius:8px;padding:.4rem .8rem;margin-top:.5rem;max-height:70px;overflow-y:auto;font-size:.7rem;color:var(--dim);border:1px solid #222;width:100%;max-width:900px}
+.log-good{color:var(--green)}.log-bad{color:var(--red)}.log-info{color:var(--blue)}
+
+/* ── RESULT CARD (post-ticket) ── */
+.result-card{background:var(--panel);border-radius:16px;padding:2rem;border:2px solid #444;max-width:500px;width:100%;text-align:center;margin-bottom:2rem}
+.result-title{font-family:'Permanent Marker',cursive;font-size:2rem;margin-bottom:.5rem}
+.result-title.good{color:var(--green)}.result-title.bad{color:var(--red)}.result-title.neutral{color:var(--gold)}
+.result-text{font-size:.95rem;color:var(--dim);line-height:1.5;margin-bottom:1rem}
+.result-stats{display:flex;gap:1.5rem;justify-content:center;flex-wrap:wrap;margin-bottom:1rem}
+.r-stat{background:rgba(0,0,0,.3);padding:.8rem 1.2rem;border-radius:10px;border:1px solid #333}
+.r-stat-label{font-size:.7rem;color:var(--dim)}.r-stat-val{font-size:1.5rem;font-weight:900}
+.r-stat-val.pos{color:var(--green)}.r-stat-val.neg{color:var(--red)}
+
+/* ── SHOP ── */
+.shop-title{font-family:'Permanent Marker',cursive;font-size:2.5rem;color:var(--gold)}
+.shop-sub{color:var(--dim);margin-bottom:1.5rem}
+.shop-grid{display:flex;gap:1.2rem;flex-wrap:wrap;justify-content:center;margin-bottom:1.5rem}
+.shop-item{width:170px;padding:1.2rem .8rem;border-radius:12px;text-align:center;cursor:pointer;border:2px solid rgba(255,255,255,.1);transition:all .2s}
+.shop-item:hover{border-color:var(--gold);transform:translateY(-4px)}
+.shop-item.sold{opacity:.3;pointer-events:none}
+.shop-price{font-weight:900;color:var(--gold);font-size:1.1rem;margin-top:.5rem}
+
+/* ── SPRINT RESOLUTION ── */
+.sprint-res-title{font-family:'Permanent Marker',cursive;font-size:2.5rem;margin-bottom:1rem}
+
+/* ── INTERRUPTION OVERLAY ── */
+.interrupt-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:300;align-items:center;justify-content:center}
+.interrupt-overlay.active{display:flex}
+.interrupt-box{background:var(--panel);border:3px solid var(--orange);border-radius:16px;padding:2rem;max-width:450px;text-align:center}
+.interrupt-icon{font-size:3rem;margin-bottom:.5rem}
+.interrupt-text{font-size:1rem;line-height:1.5;margin-bottom:1.5rem}
+.interrupt-choices{display:flex;gap:1rem;justify-content:center;flex-wrap:wrap}
+
+/* ── TUTORIAL ── */
+.overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:500;overflow-y:auto;padding:2rem}
+.overlay.active{display:block}
+.overlay-box{max-width:650px;margin:auto;background:var(--panel);border-radius:16px;padding:2rem;border:2px solid var(--gold)}
+
+@keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-5px)}75%{transform:translateX(5px)}}
+.shake{animation:shake .3s ease-out}
+@keyframes comboFlash{0%{box-shadow:0 0 30px rgba(244,208,63,.5)}100%{box-shadow:none}}
+.combo-flash{animation:comboFlash .5s ease-out}
+
+/* ── VIDEO CALL GRID ── */
+.video-call{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.6rem;width:100%;max-width:900px;margin-bottom:1rem}
+.vc-tile{background:var(--panel);border-radius:12px;padding:.6rem;text-align:center;border:2px solid #333;transition:all .3s;position:relative;min-height:100px}
+.vc-tile.active-speaker{border-color:var(--gold);box-shadow:0 0 15px rgba(244,208,63,.3);animation:speakerPulse 2s ease-in-out infinite}
+.vc-tile.disconnected{opacity:.3;filter:grayscale(1)}
+.vc-tile .vc-avatar{font-size:2rem;margin-bottom:.2rem}
+.vc-tile .vc-name{font-weight:700;font-size:.75rem;line-height:1.2}
+.vc-tile .vc-role{font-size:.6rem;color:var(--dim);text-transform:uppercase;letter-spacing:1px}
+.vc-tile .vc-expression{font-size:1.4rem;margin:.2rem 0;transition:all .3s}
+.vc-tile .vc-mood-bar{height:4px;background:#222;border-radius:2px;overflow:hidden;margin:.3rem 0}
+.vc-tile .vc-mood-fill{height:100%;border-radius:2px;transition:width .5s ease;background:linear-gradient(90deg,var(--red),var(--green))}
+.vc-tile .vc-quip{font-size:.55rem;color:var(--dim);font-style:italic;min-height:1.5em;line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vc-tile.is-player .vc-name{color:var(--gold)}
+@keyframes speakerPulse{0%,100%{box-shadow:0 0 10px rgba(244,208,63,.2)}50%{box-shadow:0 0 20px rgba(244,208,63,.4)}}
+
+/* ── SUGGEST SUBMIT OVERLAY ── */
+.suggest-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:200;align-items:center;justify-content:center}
+.suggest-overlay.active{display:flex}
+.suggest-box{background:var(--panel);border:3px solid var(--blue);border-radius:16px;padding:1.5rem 2rem;max-width:400px;text-align:center}
+.suggest-who{font-size:1.5rem;margin-bottom:.3rem}
+.suggest-text{font-size:.95rem;color:var(--dim);line-height:1.4;margin-bottom:1rem}
+.suggest-actions{display:flex;gap:1rem;justify-content:center}
+
+/* ── TURN INDICATOR ── */
+.turn-indicator{width:100%;max-width:900px;text-align:center;margin-bottom:.5rem;font-size:.85rem;font-weight:700;color:var(--gold);min-height:1.2em}
+</style>
+</head>
+
+<body>
+
+<!-- ══════ TITLE ══════ -->
+<div id="title" class="screen screen-center active">
+  <div class="preview-cards">
+    <div class="preview-card">8</div>
+    <div class="preview-card">13</div>
+    <div class="preview-card">🃏</div>
+    <div class="preview-card">21</div>
+  </div>
+  <h1 class="title">Planning Joker</h1>
+  <p class="subtitle">Estimate. Strategize. Ship.</p>
+  <button class="btn btn-gold" onclick="showCharSelect()">New Run</button>
+  <button class="btn btn-dim mt-2" onclick="toggleOverlay('tutorial',true)">How to Play</button>
+</div>
+
+<!-- ══════ TUTORIAL ══════ -->
+<div id="tutorial" class="overlay">
+  <div class="overlay-box">
+    <h2 style="font-family:'Permanent Marker',cursive;color:var(--gold);font-size:2rem;margin-bottom:1rem">How to Play</h2>
+    <div style="line-height:1.7">
+      <p style="margin-bottom:1rem">You're a <strong>Scrum Master</strong> leading a small dev team through sprint planning. Each sprint has an <strong>Epic</strong> with 3 tickets. Your job: work with your <strong>teammates</strong> to shrink each ticket's bloated story points.</p>
+      <p style="margin-bottom:1rem"><strong style="color:var(--gold)">Your Team:</strong> You'll have 2-3 AI teammates on a video call. Each has their own personality, cards, and mood. You take turns playing cards in a circle.</p>
+      <p style="margin-bottom:1rem"><strong style="color:var(--gold)">The Catch:</strong> Two things decide your fate:</p>
+      <p style="margin-bottom:.5rem">🟢 <strong>Team Mood</strong> — teammates' average mood. Too low = they disconnect!</p>
+      <p style="margin-bottom:1rem">🔵 <strong>Company Satisfaction</strong> — estimates too LOW = "are you sandbagging?"</p>
+      <p style="margin-bottom:1rem">If all teammates disconnect or satisfaction hits zero, <strong style="color:var(--red)">game over.</strong></p>
+      <p style="margin-bottom:1rem"><strong style="color:var(--gold)">Each Ticket (Turn-Based):</strong></p>
+      <p style="margin-bottom:.5rem">1. On your turn, click a <strong>Skill Card</strong> to play it (one card per turn)</p>
+      <p style="margin-bottom:.5rem">2. Your teammates take their turns automatically</p>
+      <p style="margin-bottom:.5rem">3. Combos trigger from cards played in the same round by anyone!</p>
+      <p style="margin-bottom:1rem">4. Hit <strong>Submit Estimate</strong> when the points look right, or <strong>Pass</strong> to skip</p>
+      <p style="margin-bottom:1rem"><strong style="color:var(--purple)">Epic Boss:</strong> After 3 tickets, face the Epic itself — a multi-phase boss battle with interruptions!</p>
+      <p style="margin-bottom:1rem"><strong style="color:var(--gold)">Sweet Spot:</strong> 1-5 points per item. That's the Goldilocks zone.</p>
+      <p>Survive 5 sprints to get <strong style="color:var(--gold)">promoted.</strong></p>
+    </div>
+    <button class="btn btn-gold mt-2" onclick="toggleOverlay('tutorial',false)">Got it!</button>
+  </div>
+</div>
+
+<!-- ══════ CHARACTER SELECT ══════ -->
+<div id="charselect" class="screen screen-center">
+  <h1 class="title" style="font-size:2.5rem">Choose Your Role</h1>
+  <p class="subtitle">Each role has unique traits that change how you play</p>
+  <div class="char-grid" id="char-grid"></div>
+  <button class="btn btn-gold mt-3" id="btn-start-run" onclick="beginRun()" disabled>Start Run</button>
+</div>
+
+<!-- ══════ BACKLOG ══════ -->
+<div id="backlog" class="screen screen-center">
+  <div class="hud-sprint" id="backlog-sprint" style="margin-bottom:.5rem"></div>
+  <div id="backlog-meters" style="width:100%;max-width:500px;margin-bottom:1rem"></div>
+  <div id="epic-card-container"></div>
+  <div class="ticket-row" id="ticket-row"></div>
+  <div id="backlog-info" style="font-size:.85rem;color:var(--dim)"></div>
+</div>
+
+<!-- ══════ BATTLE ══════ -->
+<div id="battle" class="screen">
+  <div class="battle-hud" id="battle-hud">
+    <div class="hud-meters" id="battle-meters"></div>
+    <div class="hud-info">
+      <div class="hud-sprint" id="b-sprint"></div>
+      <div class="hud-ticket" id="b-ticket-info"></div>
+    </div>
+    <div class="hud-stats" id="b-stats"></div>
+  </div>
+  <div class="video-call" id="video-call"></div>
+  <div id="passive-display" class="passive-area" style="display:none">
+    <span class="passive-label">Passives: </span>
+    <div class="passive-list" id="passive-list"></div>
+  </div>
+  <div class="battle-target" id="battle-target"></div>
+  <div class="applied-skills" id="applied-skills"></div>
+  <div class="turn-indicator" id="turn-indicator"></div>
+  <div class="hand-area">
+    <div class="hand-header"><span>🃏 Your Skills</span><span id="hand-hint">Click a card to play it</span></div>
+    <div class="hand" id="hand"></div>
+  </div>
+  <div class="action-bar" id="action-bar"></div>
+  <div class="log" id="log"></div>
+</div>
+
+<!-- ══════ TICKET RESULT ══════ -->
+<div id="result" class="screen screen-center">
+  <div class="result-card" id="result-card"></div>
+  <button class="btn btn-gold" id="result-btn">Continue</button>
+</div>
+
+<!-- ══════ SHOP ══════ -->
+<div id="shop" class="screen screen-center">
+  <div class="shop-title">☕ The Breakroom</div>
+  <div class="shop-sub">Pick up new skills. <span id="shop-clout" style="color:var(--gold);font-weight:700"></span></div>
+  <div class="shop-grid" id="shop-grid"></div>
+  <div class="row gap-md">
+    <button class="btn btn-gold" onclick="leaveShop()">Continue →</button>
+    <button class="btn btn-dim btn-sm" onclick="rerollShop()">🎲 Reroll ($2)</button>
+  </div>
+</div>
+
+<!-- ══════ SPRINT RESOLUTION ══════ -->
+<div id="sprintres" class="screen screen-center">
+  <div class="sprint-res-title" id="sr-title"></div>
+  <div class="result-text" id="sr-text" style="max-width:550px"></div>
+  <div class="result-stats" id="sr-stats"></div>
+  <button class="btn btn-gold mt-2" id="sr-btn"></button>
+</div>
+
+<!-- ══════ GAME OVER / WIN ══════ -->
+<div id="endgame" class="screen screen-center">
+  <div class="sprint-res-title" id="end-title"></div>
+  <div class="result-text" id="end-text" style="max-width:550px"></div>
+  <div class="result-stats" id="end-stats"></div>
+  <button class="btn btn-gold mt-2" onclick="location.reload()">Play Again</button>
+</div>
+
+<!-- ══════ INTERRUPTION OVERLAY ══════ -->
+<div class="interrupt-overlay" id="interrupt">
+  <div class="interrupt-box">
+    <div class="interrupt-icon" id="int-icon"></div>
+    <div class="interrupt-text" id="int-text"></div>
+    <div class="interrupt-choices" id="int-choices"></div>
+  </div>
+</div>
+
+<!-- ══════ SUGGEST SUBMIT OVERLAY ══════ -->
+<div class="suggest-overlay" id="suggest-submit">
+  <div class="suggest-box">
+    <div class="suggest-who" id="suggest-who"></div>
+    <div class="suggest-text" id="suggest-text"></div>
+    <div class="suggest-actions">
+      <button class="btn btn-green btn-sm" onclick="acceptSuggestSubmit()">Accept</button>
+      <button class="btn btn-dim btn-sm" onclick="declineSuggestSubmit()">Keep Going</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════ -->
+<script>
+// ═════════════════════════════════════
+//  PLANNING JOKER v3 — Team Battle
+// ═════════════════════════════════════
+
+// ─── SKILL DATABASE ───
+const SKILLS = [
+  // COMMON
+  {id:'breakdown',name:'Break It Down',icon:'🔨',desc:'-30%',rarity:'common',type:'reduce',cost:1,effect:{pct:.30},price:3},
+  {id:'timebox',name:'Timebox',icon:'⏱️',desc:'-20%',rarity:'common',type:'reduce',cost:1,effect:{pct:.20},price:2},
+  {id:'spike',name:'Spike It',icon:'🔬',desc:'-25%',rarity:'common',type:'reduce',cost:1,effect:{pct:.25},price:2},
+  {id:'pairprog',name:'Pair Program',icon:'👥',desc:'Flat -5',rarity:'common',type:'flat',cost:1,effect:{flat:5},price:2},
+  {id:'standup',name:'Quick Standup',icon:'🗣️',desc:'-3, +1 energy',rarity:'common',type:'flat',cost:0,effect:{flat:3,energy:1},price:3},
+  {id:'coffee',name:'Coffee Run',icon:'☕',desc:'+2 energy',rarity:'common',type:'energy',cost:0,effect:{energy:2},price:2},
+  // UNCOMMON
+  {id:'refactor',name:'Pre-Refactor',icon:'🧹',desc:'-40%',rarity:'uncommon',type:'reduce',cost:2,effect:{pct:.40},price:5},
+  {id:'mvp',name:'MVP Mindset',icon:'🎯',desc:'-50%, -5 mood',rarity:'uncommon',type:'reduce',cost:2,effect:{pct:.50,moraleCost:5},price:4},
+  {id:'techdebt',name:'Embrace Tech Debt',icon:'💳',desc:'Flat -20, -8 sat next sprint',rarity:'uncommon',type:'flat',cost:1,effect:{flat:20,futureSatPenalty:8},price:4},
+  {id:'swagger',name:'Swagger Docs',icon:'📖',desc:'+10 satisfaction',rarity:'uncommon',type:'buff',cost:1,effect:{satGain:10},price:4},
+  {id:'retro',name:'Good Retro',icon:'🔄',desc:'+10 mood',rarity:'uncommon',type:'buff',cost:1,effect:{moraleGain:10},price:4},
+  {id:'prototype',name:'Quick Prototype',icon:'🛠️',desc:'-35%, +5 sat',rarity:'uncommon',type:'reduce',cost:2,effect:{pct:.35,satGain:5},price:5},
+  // RARE
+  {id:'architect',name:'Architect Review',icon:'🏗️',desc:'-60%',rarity:'rare',type:'reduce',cost:2,effect:{pct:.60},price:8},
+  {id:'automate',name:'Automate It',icon:'🤖',desc:'-45%, passive -10%',rarity:'rare',type:'reduce',cost:2,effect:{pct:.45},passive:{allReduce:.10},price:8},
+  {id:'scopehammer',name:'Scope Hammer',icon:'🔨',desc:'Cap at 21 pts',rarity:'rare',type:'cap',cost:2,effect:{cap:21},price:7},
+  {id:'pizzaparty',name:'Pizza Party',icon:'🍕',desc:'+15 mood, +2 energy',rarity:'rare',type:'buff',cost:0,effect:{moraleGain:15,energy:2},price:7},
+  {id:'demogod',name:'Demo God',icon:'🎬',desc:'+20 satisfaction',rarity:'rare',type:'buff',cost:1,effect:{satGain:20},price:7},
+  // EPIC
+  {id:'microservice',name:'Microservice It',icon:'🧩',desc:'÷3',rarity:'epic',type:'divide',cost:3,effect:{divBy:3},price:12},
+  {id:'outsource',name:'Outsource',icon:'🌍',desc:'-75%, -10 mood',rarity:'epic',type:'reduce',cost:2,effect:{pct:.75,moraleCost:10},price:10},
+  {id:'aiassist',name:'AI Assist',icon:'🧠',desc:'-70%',rarity:'epic',type:'reduce',cost:3,effect:{pct:.70},price:12},
+  {id:'teamlead',name:'Team Lead Aura',icon:'⭐',desc:'Passive: +15% reductions',rarity:'epic',type:'passive',cost:0,effect:{},passive:{boostReduce:.15},price:14},
+  // LEGENDARY
+  {id:'cto_whisper',name:'CTO Whisperer',icon:'👔',desc:'Set to 1. Once/sprint.',rarity:'legendary',type:'setone',cost:3,effect:{setTo:1},price:20,oncePerSprint:true},
+  {id:'velocity_hack',name:'Velocity Hack',icon:'🚀',desc:'Passive: +2 energy/sprint',rarity:'legendary',type:'passive',cost:0,effect:{},passive:{bonusEnergy:2},price:18},
+  {id:'planning_joker',name:'Planning Joker',icon:'🃏',desc:'Copies last skill played',rarity:'legendary',type:'wild',cost:1,effect:{},price:20},
+];
+
+// ─── CHARACTERS ───
+const CHARACTERS = [
+  {id:'dev',name:'Developer',icon:'💻',trait:'Balanced. 3 energy, no modifiers.',unlocked:true,condition:'',apply:g=>{}},
+  {id:'manager',name:'Manager',icon:'📊',trait:'+1 max energy. All buff skills cost 0.',unlocked:false,condition:'Survive 3 sprints',apply:g=>{g.maxEnergy+=1;g.charMod='manager'}},
+  {id:'po',name:'Product Owner',icon:'📋',trait:'Start with MVP Mindset. +10 satisfaction.',unlocked:false,condition:'Achieve a Perfect Sprint',apply:g=>{g.satisfaction+=10;g.charMod='po';if(!g.deck.find(s=>s.id==='mvp'))g.deck.push({...SKILLS.find(s=>s.id==='mvp')})}},
+  {id:'techlead',name:'Tech Lead',icon:'🔧',trait:'All combo bonuses doubled.',unlocked:false,condition:'Play 3 combos in one run',apply:g=>{g.charMod='techlead'}},
+  {id:'founder',name:'Startup Founder',icon:'🚀',trait:'+5 starting clout, -15 mood.',unlocked:false,condition:'Win a full run',apply:g=>{g.clout+=5;g.charMod='founder'}},
+  {id:'exec',name:'Executive',icon:'👔',trait:'+20 satisfaction, tickets +20% points.',unlocked:false,condition:'Win with both meters >80%',apply:g=>{g.satisfaction+=20;g.charMod='exec'}},
+];
+
+// ─── TEAMMATE ARCHETYPES ───
+const TEAMMATES = [
+  {
+    id:'optimizer', name:'Priya', role:'Staff Engineer', icon:'👩‍💻',
+    personality:'optimizer',
+    baseCards:['breakdown','refactor','spike'],
+    moods:{happy:'😊',neutral:'😐',frustrated:'😤',energized:'🤩',checked_out:'😶'},
+    quips:{
+      playCard:['Optimizing...','Let me refactor that.','This can be smaller.'],
+      goodResult:['Clean.','Efficient.','As expected.'],
+      badResult:['Suboptimal.','We need to rethink this.','That\'s concerning.'],
+      suggestSubmit:['The numbers look right. Ship it.','This is well-scoped now.'],
+      interruption:['Can we get back on track?','Focus, team.','Not now...'],
+      disconnect:['I have another meeting. Good luck.'],
+      argue:['Priya and Jake are arguing about the architecture.'],
+    }
+  },
+  {
+    id:'people_person', name:'Marcus', role:'Engineering Manager', icon:'👨‍💼',
+    personality:'people_person',
+    baseCards:['coffee','retro','standup'],
+    moods:{happy:'😄',neutral:'🙂',frustrated:'😟',energized:'🥳',checked_out:'😔'},
+    quips:{
+      playCard:['Let\'s boost the team!','Here\'s some energy.','Everyone doing okay?'],
+      goodResult:['Great teamwork!','Love to see it!','Team\'s on fire!'],
+      badResult:['We\'ll get through this.','Hang in there.','Let\'s stay positive.'],
+      suggestSubmit:['I think the team\'s happy with this.','Feels like a good number.'],
+      interruption:['I\'ll handle this...','Let me smooth things over.'],
+      disconnect:['I need to step away for my mental health.'],
+    }
+  },
+  {
+    id:'cowboy', name:'Jake', role:'10x Developer', icon:'🤠',
+    personality:'cowboy',
+    baseCards:['mvp','techdebt','breakdown'],
+    moods:{happy:'😎',neutral:'🙄',frustrated:'😡',energized:'🔥',checked_out:'💀'},
+    quips:{
+      playCard:['YOLO.','Ship it fast.','Who needs tests?','Hold my coffee.'],
+      goodResult:['Told ya.','Easy money.','Speedrun strats.'],
+      badResult:['Whatever.','It\'ll buff out.','We can fix it in prod.'],
+      suggestSubmit:['Close enough, let\'s go.','Good enough for government work.'],
+      interruption:['Ugh, more meetings?','Can\'t we just code?'],
+      disconnect:['I\'m going heads-down. Don\'t @ me.'],
+      argue:['Jake wants to skip all testing and "just ship it."'],
+    }
+  },
+  {
+    id:'junior', name:'Alex', role:'Junior Developer', icon:'🧑‍💻',
+    personality:'junior',
+    baseCards:['timebox','pairprog','coffee'],
+    moods:{happy:'😃',neutral:'🤔',frustrated:'😰',energized:'✨',checked_out:'😵'},
+    quips:{
+      playCard:['Is this right?','I think this helps!','Learning so much!'],
+      goodResult:['Wow, that worked!','I\'m getting better!','Cool!'],
+      badResult:['Oh no...','Did I mess up?','Sorry, still learning.'],
+      suggestSubmit:['I think that\'s good? Maybe?','Looks okay to me!'],
+      interruption:['Eep!','What do we do?','This is stressful...'],
+      disconnect:['I don\'t think I can do this... Sorry.'],
+    }
+  },
+];
+
+// ─── EPIC TEMPLATES ───
+const EPIC_TEMPLATES = [
+  {name:'User Auth Overhaul',theme:'Security & Identity',tickets:['Login Revamp','Password Reset','OAuth Integration']},
+  {name:'Performance Sprint',theme:'Speed & Scale',tickets:['DB Query Optimization','CDN Setup','Lazy Loading']},
+  {name:'Mobile Responsive',theme:'Cross-Platform',tickets:['Responsive Grid','Touch Navigation','PWA Setup']},
+  {name:'Analytics Pipeline',theme:'Data & Insights',tickets:['Event Tracking','Dashboard UI','Export Reports']},
+  {name:'Payment Integration',theme:'Commerce',tickets:['Stripe Setup','Invoice Generator','Subscription Flow']},
+  {name:'Notification System',theme:'Engagement',tickets:['Email Templates','Push Notifications','In-App Alerts']},
+  {name:'Search Overhaul',theme:'Discovery',tickets:['Elasticsearch Setup','Autocomplete','Filter System']},
+  {name:'CI/CD Pipeline',theme:'DevOps',tickets:['Docker Config','GitHub Actions','Staging Env']},
+  {name:'Admin Dashboard',theme:'Internal Tools',tickets:['User Management','Audit Logs','Role Permissions']},
+  {name:'API v2 Migration',theme:'Platform',tickets:['Schema Redesign','Versioning Layer','Client SDK']},
+];
+
+const TICKET_TYPES = ['Feature','Bug','Tech Debt','Spike'];
+
+// ─── BOSS INTERRUPTIONS ───
+const INTERRUPTIONS = [
+  {icon:'📢',text:'The PM changes scope mid-review!\n"Actually, can we also handle edge cases?"',choices:[
+    {label:'Absorb it (+30% points)',effect:g=>{g.bossPhases[g.bossCurrentPhase].pts=Math.floor(g.bossPhases[g.bossCurrentPhase].pts*1.3)}},
+    {label:'Push back (-5 mood)',effect:g=>{adjustTeamMood(-5)}}
+  ]},
+  {icon:'🎬',text:'CTO walks in: "Can you give a quick demo of this?"',choices:[
+    {label:'Demo it (-2 energy, +10 sat)',effect:g=>{g.energy=Math.max(0,g.energy-2);g.satisfaction=Math.min(100,g.satisfaction+10)}},
+    {label:'Decline (-5 satisfaction)',effect:g=>{g.satisfaction=Math.max(0,g.satisfaction-5)}}
+  ]},
+  {icon:'🔥',text:'Production incident! Alarms going off.',choices:[
+    {label:'Drop everything (-3 energy)',effect:g=>{g.energy=Math.max(0,g.energy-3)}},
+    {label:'Ignore it (-10 mood)',effect:g=>{adjustTeamMood(-10)}}
+  ]},
+  {icon:'📊',text:'VP wants a status update in 5 minutes.',choices:[
+    {label:'Compile report (-1 energy, +8 sat)',effect:g=>{g.energy=Math.max(0,g.energy-1);g.satisfaction=Math.min(100,g.satisfaction+8)}},
+    {label:'Wing it (50/50 ±10 sat)',effect:g=>{const d=Math.random()>.5?10:-10;g.satisfaction=Math.min(100,Math.max(0,g.satisfaction+d))}}
+  ]},
+  {icon:'🍕',text:'Someone ordered pizza for the team!',choices:[
+    {label:'Take a break (+10 mood, -1 play)',effect:g=>{adjustTeamMood(10);g.bossPlaysLeft=Math.max(0,g.bossPlaysLeft-1)}},
+    {label:'Keep grinding (+1 play)',effect:g=>{g.bossPlaysLeft+=1}}
+  ]},
+  // Teammate-specific interruptions
+  {icon:'💥',text:'Priya and Jake are arguing about the architecture!',choices:[
+    {label:'Mediate (-1 energy, +5 mood)',effect:g=>{g.energy=Math.max(0,g.energy-1);adjustTeamMood(5)}},
+    {label:'Let them fight (-8 mood)',effect:g=>{adjustTeamMood(-8)}}
+  ]},
+  {icon:'🐛',text:'Alex accidentally pushed to main!',choices:[
+    {label:'Help them fix it (-2 energy)',effect:g=>{g.energy=Math.max(0,g.energy-2)}},
+    {label:'Blame them (-15 mood for Alex)',effect:g=>{const alex=g.team.find(t=>t.name==='Alex');if(alex)alex.mood=Math.max(0,alex.mood-15);else adjustTeamMood(-5)}}
+  ]},
+];
+
+// ─── GAME STATE ───
+let G = {};
+let selectedChar = null;
+
+function newState() {
+  return {
+    sprint:1, maxSprints:5,
+    satisfaction:75, clout:5,
+    energy:5, maxEnergy:5,
+    deck:[], hand:[],
+    passives:[], charMod:null,
+    // Team
+    team:[], turnOrder:[], currentTurnIdx:0, roundNum:1,
+    roundCards:[], // cards played this round by anyone (for combos)
+    activeSpeaker:null, // 'player' or teammate index
+    isPlayerTurn:true,
+    aiTurnInProgress:false,
+    // current epic
+    epic:null, tickets:[], ticketIdx:0,
+    sprintResults:[],
+    // boss state
+    isBoss:false, bossPhases:[], bossCurrentPhase:0, bossPlaysLeft:16,
+    // tracking
+    lastSkillPlayed:null, usedCTOThisSprint:false,
+    pendingSatPenalty:0, combosThisRun:0,
+    appliedSkills:[], log:[],
+  };
+}
+
+// ─── TEAM HELPERS ───
+function teamMorale() {
+  const active = G.team.filter(t => !t.disconnected);
+  if (!active.length) return 0;
+  return Math.round(active.reduce((s, t) => s + t.mood, 0) / active.length);
+}
+
+function adjustTeamMood(amount) {
+  G.team.forEach(t => {
+    if (t.disconnected) return;
+    let mod = 1;
+    if (t.personality === 'people_person') mod = amount > 0 ? 1.4 : 0.8;
+    if (t.personality === 'cowboy') mod = amount < 0 ? 1.3 : 0.7;
+    if (t.personality === 'junior') mod = 1.1;
+    t.mood = Math.min(100, Math.max(0, t.mood + Math.round(amount * mod)));
+    // Check disconnect
+    if (t.mood <= 0 && !t.disconnected) {
+      t.disconnected = true;
+      const archetype = TEAMMATES.find(a => a.id === t.personality);
+      const quip = archetype ? pickQuip(archetype.quips.disconnect) : 'Disconnected.';
+      log(`📴 ${t.name} disconnected: "${quip}"`, 'bad');
+      rebuildTurnOrder();
+    }
+  });
+}
+
+function getMoodExpression(teammate) {
+  const archetype = TEAMMATES.find(a => a.id === teammate.personality);
+  if (!archetype) return '😐';
+  const m = teammate.mood;
+  if (m >= 80) return archetype.moods.energized;
+  if (m >= 55) return archetype.moods.happy;
+  if (m >= 35) return archetype.moods.neutral;
+  if (m >= 15) return archetype.moods.frustrated;
+  return archetype.moods.checked_out;
+}
+
+function pickQuip(arr) {
+  if (!arr || !arr.length) return '';
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+function initTeam() {
+  // Pick 2 random archetypes
+  const shuffled = [...TEAMMATES].sort(() => Math.random() - 0.5);
+  const picks = shuffled.slice(0, 2);
+  G.team = picks.map(arch => ({
+    name: arch.name,
+    role: arch.role,
+    icon: arch.icon,
+    personality: arch.id,
+    mood: 70,
+    disconnected: false,
+    hand: [],
+    cardPool: arch.baseCards.map(id => ({...SKILLS.find(s => s.id === id)})),
+    quip: '',
+  }));
+}
+
+function setupTurnOrder() {
+  G.turnOrder = ['player'];
+  G.team.forEach((t, i) => {
+    if (!t.disconnected) G.turnOrder.push('teammate_' + i);
+  });
+  G.currentTurnIdx = 0;
+  G.roundNum = 1;
+  G.roundCards = [];
+  G.isPlayerTurn = true;
+  G.activeSpeaker = 'player';
+}
+
+function rebuildTurnOrder() {
+  const newOrder = ['player'];
+  G.team.forEach((t, i) => {
+    if (!t.disconnected) newOrder.push('teammate_' + i);
+  });
+  G.turnOrder = newOrder;
+  if (G.currentTurnIdx >= G.turnOrder.length) {
+    G.currentTurnIdx = 0;
+    G.roundNum++;
+    G.roundCards = [];
+  }
+}
+
+// ─── UNLOCKS (localStorage) ───
+function getUnlocks() {
+  try { return JSON.parse(localStorage.getItem('pj_unlocks')) || {dev:true}; } catch { return {dev:true}; }
+}
+function saveUnlock(id) {
+  const u = getUnlocks(); u[id] = true;
+  try { localStorage.setItem('pj_unlocks', JSON.stringify(u)); } catch {}
+}
+
+// ─── SCREEN NAV ───
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+
+function toggleOverlay(id, show) {
+  document.getElementById(id).classList.toggle('active', show);
+}
+
+// ─── CHARACTER SELECT ───
+function showCharSelect() {
+  showScreen('charselect');
+  selectedChar = null;
+  const grid = document.getElementById('char-grid');
+  grid.innerHTML = '';
+  const unlocks = getUnlocks();
+
+  CHARACTERS.forEach(ch => {
+    const unlocked = unlocks[ch.id] || ch.unlocked;
+    const div = document.createElement('div');
+    div.className = `char-card ${unlocked ? '' : 'locked'}`;
+    div.innerHTML = `
+      <div class="char-icon">${ch.icon}</div>
+      <div class="char-name">${unlocked ? ch.name : '???'}</div>
+      <div class="char-trait">${unlocked ? ch.trait : ''}</div>
+      ${!unlocked ? `<div class="char-unlock">🔒 ${ch.condition}</div>` : ''}
+      ${!unlocked ? '<div class="locked-overlay">🔒</div>' : ''}
+    `;
+    if (unlocked) {
+      div.onclick = () => {
+        grid.querySelectorAll('.char-card').forEach(c => c.classList.remove('selected'));
+        div.classList.add('selected');
+        selectedChar = ch;
+        document.getElementById('btn-start-run').disabled = false;
+      };
+    }
+    grid.appendChild(div);
+  });
+}
+
+// ─── BEGIN RUN ───
+function beginRun() {
+  if (!selectedChar) return;
+  G = newState();
+  // Starter deck
+  ['breakdown','timebox','spike','pairprog','coffee'].forEach(id => {
+    G.deck.push({...SKILLS.find(s => s.id === id)});
+  });
+  // Apply character
+  selectedChar.apply(G);
+  // Register passives from deck
+  G.deck.forEach(s => { if (s.passive) G.passives.push(s.passive); });
+  // Initialize team
+  initTeam();
+  startSprint();
+}
+
+// ─── SPRINT ───
+function startSprint() {
+  G.ticketIdx = 0;
+  G.sprintResults = [];
+  G.usedCTOThisSprint = false;
+  if (G.pendingSatPenalty > 0) {
+    G.satisfaction = Math.max(0, G.satisfaction - G.pendingSatPenalty);
+    G.pendingSatPenalty = 0;
+  }
+  // Pick epic
+  const tmpl = EPIC_TEMPLATES[Math.floor(Math.random() * EPIC_TEMPLATES.length)];
+  const basePoints = 8 + G.sprint * 12;
+  G.epic = { name: tmpl.name, theme: tmpl.theme };
+  G.tickets = tmpl.tickets.map((name, i) => {
+    const pts = basePoints + Math.floor(Math.random() * G.sprint * 10);
+    const inflated = G.charMod === 'exec' ? Math.floor(pts * 1.2) : pts;
+    return { name, type: TICKET_TYPES[Math.floor(Math.random()*TICKET_TYPES.length)], points: inflated, original: inflated, done: false, final: 0 };
+  });
+  showBacklog();
+}
+
+// ─── BACKLOG SCREEN ───
+function showBacklog() {
+  showScreen('backlog');
+  document.getElementById('backlog-sprint').textContent = `Sprint ${G.sprint} / ${G.maxSprints}`;
+
+  const md = document.getElementById('backlog-meters');
+  md.innerHTML = renderMeters();
+
+  const ec = document.getElementById('epic-card-container');
+  const allDone = G.tickets.every(t => t.done);
+  const epicDone = G.sprintResults.length > G.tickets.length;
+  ec.innerHTML = `
+    <div class="epic-card ${allDone && !epicDone ? 'boss-ready' : ''} ${epicDone ? 'completed' : ''}" ${allDone && !epicDone ? 'onclick="startBossBattle()"' : ''}>
+      <div class="epic-label">Epic${allDone && !epicDone ? ' — Boss Battle Ready!' : ''}</div>
+      <div class="epic-name">${G.epic.name}</div>
+      <div class="epic-theme">${G.epic.theme}</div>
+      ${allDone && !epicDone ? '<div style="margin-top:.5rem;font-size:.9rem;color:var(--gold);font-weight:700">⚔️ Click to begin boss battle</div>' : ''}
+      ${epicDone ? '<div style="margin-top:.5rem;color:var(--green);font-weight:700">✓ Complete</div>' : ''}
+    </div>
+  `;
+
+  const tr = document.getElementById('ticket-row');
+  tr.innerHTML = '';
+  G.tickets.forEach((t, i) => {
+    const available = !t.done && i === G.tickets.findIndex(x => !x.done);
+    const div = document.createElement('div');
+    div.className = `ticket-card ${t.done ? 'done' : available ? 'available' : 'locked'}`;
+    const ptsClass = t.points <= 1 ? 'pts-perfect' : t.points <= 5 ? 'pts-low' : t.points <= 13 ? 'pts-med' : 'pts-high';
+    div.innerHTML = `
+      <div class="ticket-number">${i+1}</div>
+      <div class="ticket-type">${t.type}</div>
+      <div class="ticket-name">${t.name}</div>
+      <div class="ticket-pts ${ptsClass}">${t.done ? t.final : t.points}</div>
+      <div class="ticket-status" style="color:${t.done ? 'var(--green)' : available ? 'var(--blue)' : 'var(--dim)'}">
+        ${t.done ? '✓ Estimated' : available ? '→ Next' : '🔒 Locked'}
+      </div>
+    `;
+    if (available) div.onclick = () => startTicketBattle(i);
+    tr.appendChild(div);
+  });
+
+  document.getElementById('backlog-info').textContent = allDone && !epicDone ? 'All tickets estimated — time for the Epic boss battle!' : '';
+}
+
+function renderMeters() {
+  const mood = teamMorale();
+  return `
+    <div class="meter-box"><div class="meter-label"><span>🟢 Team Mood</span><span>${mood}%</span></div><div class="meter-bar"><div class="meter-fill meter-morale" style="width:${mood}%"></div></div></div>
+    <div class="meter-box" style="margin-top:.3rem"><div class="meter-label"><span>🔵 Satisfaction</span><span>${Math.round(G.satisfaction)}%</span></div><div class="meter-bar"><div class="meter-fill meter-sat" style="width:${G.satisfaction}%"></div></div></div>
+  `;
+}
+
+// ─── TICKET BATTLE ───
+function startTicketBattle(idx) {
+  G.ticketIdx = idx;
+  G.isBoss = false;
+  G.appliedSkills = [];
+  G.log = [];
+  resetEnergy();
+  dealHand();
+  dealTeamHands();
+  setupTurnOrder();
+  showScreen('battle');
+  renderBattle();
+}
+
+function resetEnergy() {
+  G.energy = G.maxEnergy + getPassive('bonusEnergy');
+}
+
+function dealHand() {
+  const indices = [...Array(G.deck.length).keys()].sort(() => Math.random() - .5);
+  G.hand = indices.slice(0, Math.min(5, G.deck.length));
+}
+
+function dealTeamHands() {
+  G.team.forEach(t => {
+    if (t.disconnected) return;
+    const pool = [...t.cardPool];
+    const shuffled = pool.sort(() => Math.random() - 0.5);
+    t.hand = shuffled.slice(0, Math.min(3, shuffled.length)).map(s => ({...s}));
+  });
+}
+
+function getPassive(key) {
+  return G.passives.reduce((s, p) => s + (p[key] || 0), 0);
+}
+
+function currentTarget() {
+  if (G.isBoss) return G.bossPhases[G.bossCurrentPhase];
+  return G.tickets[G.ticketIdx];
+}
+
+// ─── RENDER VIDEO CALL ───
+function renderVideoCall() {
+  const vc = document.getElementById('video-call');
+  let html = '';
+
+  // Player tile
+  const playerActive = G.activeSpeaker === 'player';
+  html += `<div class="vc-tile is-player ${playerActive ? 'active-speaker' : ''}">
+    <div class="vc-avatar">${selectedChar ? selectedChar.icon : '💻'}</div>
+    <div class="vc-name">You (${selectedChar ? selectedChar.name : 'Dev'})</div>
+    <div class="vc-role">Scrum Master</div>
+    <div class="vc-expression">${teamMorale() >= 50 ? '😎' : '😅'}</div>
+    <div class="vc-quip">${G.isPlayerTurn ? 'Your turn!' : ''}</div>
+  </div>`;
+
+  // Teammate tiles
+  G.team.forEach((t, i) => {
+    const active = G.activeSpeaker === 'teammate_' + i;
+    html += `<div class="vc-tile ${active ? 'active-speaker' : ''} ${t.disconnected ? 'disconnected' : ''}">
+      <div class="vc-avatar">${t.icon}</div>
+      <div class="vc-name">${t.name}</div>
+      <div class="vc-role">${t.role}</div>
+      <div class="vc-expression">${t.disconnected ? '📴' : getMoodExpression(t)}</div>
+      <div class="vc-mood-bar"><div class="vc-mood-fill" style="width:${t.mood}%"></div></div>
+      <div class="vc-quip">${t.disconnected ? 'Disconnected' : t.quip || ''}</div>
+    </div>`;
+  });
+
+  vc.innerHTML = html;
+}
+
+// ─── RENDER BATTLE ───
+function renderBattle() {
+  // HUD
+  document.getElementById('battle-meters').innerHTML = renderMeters();
+  document.getElementById('b-sprint').textContent = `Sprint ${G.sprint}`;
+  document.getElementById('b-ticket-info').textContent = G.isBoss ? `⚔️ Epic Boss: ${G.epic.name}` : `Ticket ${G.ticketIdx+1}/3: ${G.tickets[G.ticketIdx].name}`;
+  document.getElementById('b-stats').innerHTML = `
+    <div class="stat"><span>⚡ Energy</span><span class="stat-val">${G.energy}</span></div>
+    <div class="stat"><span>💰 Clout</span><span class="stat-val">${G.clout}</span></div>
+    <div class="stat"><span>🔄 Round</span><span class="stat-val">${G.roundNum}</span></div>
+  `;
+
+  // Video Call
+  renderVideoCall();
+
+  // Passives
+  const pd = document.getElementById('passive-display');
+  const pl = document.getElementById('passive-list');
+  const passiveCards = G.deck.filter(s => s.passive);
+  if (passiveCards.length) {
+    pd.style.display = 'block';
+    pl.innerHTML = passiveCards.map(s => `<div class="passive-tag">${s.icon} ${s.name}</div>`).join('');
+  } else pd.style.display = 'none';
+
+  // Target
+  const tgt = document.getElementById('battle-target');
+  if (G.isBoss) {
+    tgt.className = 'battle-target boss';
+    const phase = G.bossPhases[G.bossCurrentPhase];
+    tgt.innerHTML = `
+      <div class="target-label">⚔️ Epic Boss — Phase ${G.bossCurrentPhase+1}/3</div>
+      <div class="target-name">${G.epic.name}</div>
+      <div class="target-points ${ptsColor(phase.pts)}">${phase.pts}</div>
+      <div class="target-original">Original: ${phase.original}</div>
+      <div class="boss-phases">${G.bossPhases.map((p,i) => `
+        <div class="boss-phase ${i===G.bossCurrentPhase?'active-phase':''} ${p.done?'done-phase':''}">
+          <div class="phase-label">Phase ${i+1}</div>
+          <div class="phase-pts ${ptsColor(p.pts)}">${p.done?'✓':p.pts}</div>
+        </div>
+      `).join('')}</div>
+      <div class="boss-plays-left">⚡ Plays remaining: ${G.bossPlaysLeft}</div>
+    `;
+  } else {
+    const t = G.tickets[G.ticketIdx];
+    tgt.className = 'battle-target';
+    tgt.innerHTML = `
+      <div class="target-label">${t.type}</div>
+      <div class="target-name">${t.name}</div>
+      <div class="target-points ${ptsColor(t.points)}">${t.points}</div>
+      <div class="target-original">Original: ${t.original}</div>
+    `;
+  }
+
+  // Applied
+  document.getElementById('applied-skills').innerHTML = G.appliedSkills.map(s => `<div class="applied-tag">${s.icon} ${s.name}${s.playedBy ? ' ('+s.playedBy+')' : ''}</div>`).join('');
+
+  // Turn indicator
+  const ti = document.getElementById('turn-indicator');
+  if (G.isPlayerTurn) {
+    ti.textContent = '🎯 Your Turn — click a card to play, or Pass/Submit';
+  } else {
+    const turnKey = G.turnOrder[G.currentTurnIdx];
+    if (turnKey && turnKey.startsWith('teammate_')) {
+      const idx = parseInt(turnKey.split('_')[1]);
+      const tm = G.team[idx];
+      ti.textContent = tm ? `⏳ ${tm.name}'s turn...` : '';
+    } else {
+      ti.textContent = '';
+    }
+  }
+
+  // Hand (only interactive on player's turn)
+  const handDiv = document.getElementById('hand');
+  handDiv.innerHTML = '';
+  G.hand.forEach((dIdx, hIdx) => {
+    const sk = G.deck[dIdx];
+    if (!sk) return;
+    const cost = getEffectiveCost(sk);
+    const canAfford = cost <= G.energy;
+    const canPlay = G.isPlayerTurn && canAfford && !G.aiTurnInProgress;
+    const div = document.createElement('div');
+    div.className = `skill-card ${sk.rarity} ${(!canPlay)?'disabled':''}`;
+    div.innerHTML = `
+      <div class="sk-rarity">${sk.rarity}</div>
+      <div class="sk-icon">${sk.icon}</div>
+      <div class="sk-name">${sk.name}</div>
+      <div class="sk-desc">${sk.desc}</div>
+      ${cost>0?`<div class="sk-cost">${cost}</div>`:''}
+    `;
+    if (canPlay) {
+      div.onclick = () => { playerPlayCard(hIdx); };
+    }
+    handDiv.appendChild(div);
+  });
+
+  // Actions
+  const ab = document.getElementById('action-bar');
+  const bossPlayable = !G.isBoss || G.bossPlaysLeft > 0;
+  const canAct = G.isPlayerTurn && !G.aiTurnInProgress;
+  ab.innerHTML = `
+    <button class="btn btn-gold btn-sm" onclick="submitEstimate()" ${canAct ? '' : 'disabled'}>✓ Submit Estimate</button>
+    <button class="btn btn-dim btn-sm" onclick="playerPass()" ${canAct && bossPlayable ? '' : 'disabled'}>⏭ Pass</button>
+  `;
+
+  // Log
+  const logDiv = document.getElementById('log');
+  logDiv.innerHTML = G.log.map(l => `<div class="log-${l.t}">${l.m}</div>`).join('');
+  logDiv.scrollTop = logDiv.scrollHeight;
+
+  // Game over checks
+  const allDisconnected = G.team.every(t => t.disconnected);
+  if (allDisconnected && G.team.length > 0) { gameOver('morale'); return; }
+  if (G.satisfaction <= 0) { gameOver('satisfaction'); return; }
+}
+
+function ptsColor(p) { return p<=1?'pts-perfect':p<=5?'pts-low':p<=13?'pts-med':'pts-high'; }
+
+function getEffectiveCost(sk) {
+  if (G.charMod === 'manager' && sk.type === 'buff') return 0;
+  return sk.cost;
+}
+
+// ─── TURN SYSTEM ───
+function playerPlayCard(hIdx) {
+  if (!G.isPlayerTurn || G.aiTurnInProgress) return;
+  if (G.isBoss && G.bossPlaysLeft <= 0) return;
+
+  const dIdx = G.hand[hIdx];
+  const sk = {...G.deck[dIdx]};
+  const cost = getEffectiveCost(sk);
+  if (cost > G.energy) return;
+
+  G.energy -= cost;
+  const target = currentTarget();
+  sk.playedBy = 'You';
+  applySkill(sk, target);
+  G.appliedSkills.push(sk);
+  G.lastSkillPlayed = sk;
+  G.roundCards.push(sk);
+
+  // Clamp target
+  if (G.isBoss) {
+    target.pts = Math.max(1, Math.round(target.pts));
+  } else {
+    target.points = Math.max(1, Math.round(target.points));
+  }
+
+  // Remove from hand
+  G.hand.splice(hIdx, 1);
+
+  if (G.isBoss) {
+    G.bossPlaysLeft--;
+    log(`Phase ${G.bossCurrentPhase+1} now at ${G.bossPhases[G.bossCurrentPhase].pts} pts`, 'info');
+  } else {
+    log(`${target.name} now at ${target.points} pts`, 'info');
+  }
+
+  // Advance turn
+  advanceTurn();
+}
+
+function playerPass() {
+  if (!G.isPlayerTurn || G.aiTurnInProgress) return;
+  log('You pass.', 'info');
+  advanceTurn();
+}
+
+function advanceTurn() {
+  G.currentTurnIdx++;
+
+  // Round wrap
+  if (G.currentTurnIdx >= G.turnOrder.length) {
+    // Check combos at end of round
+    if (G.roundCards.length >= 2) {
+      checkCombos(G.roundCards, currentTarget());
+    }
+    G.currentTurnIdx = 0;
+    G.roundNum++;
+    G.roundCards = [];
+    // Re-deal teammate hands each round
+    dealTeamHands();
+  }
+
+  const turnKey = G.turnOrder[G.currentTurnIdx];
+  if (turnKey === 'player') {
+    G.isPlayerTurn = true;
+    G.activeSpeaker = 'player';
+    renderBattle();
+    // Boss interruption at start of player's turn
+    if (G.isBoss && G.roundNum > 1 && Math.random() < 0.25) {
+      triggerInterruption();
+    }
+  } else {
+    G.isPlayerTurn = false;
+    G.activeSpeaker = turnKey;
+    G.aiTurnInProgress = true;
+    renderBattle();
+    // AI turn with delay
+    setTimeout(() => {
+      executeAITurn(turnKey);
+    }, 500);
+  }
+}
+
+function executeAITurn(turnKey) {
+  const idx = parseInt(turnKey.split('_')[1]);
+  const teammate = G.team[idx];
+  if (!teammate || teammate.disconnected) {
+    G.aiTurnInProgress = false;
+    advanceTurn();
+    return;
+  }
+
+  const archetype = TEAMMATES.find(a => a.id === teammate.personality);
+  const action = aiChooseAction(teammate);
+
+  if (action.type === 'suggest_submit') {
+    teammate.quip = pickQuip(archetype.quips.suggestSubmit);
+    G.aiTurnInProgress = false;
+    renderBattle();
+    showSuggestSubmit(teammate);
+    return;
+  }
+
+  if (action.type === 'pass') {
+    teammate.quip = '...';
+    log(`${teammate.name} passes.`, 'info');
+    G.aiTurnInProgress = false;
+    renderBattle();
+    setTimeout(() => advanceTurn(), 300);
+    return;
+  }
+
+  // Play card
+  const card = action.card;
+  teammate.quip = pickQuip(archetype.quips.playCard);
+  card.playedBy = teammate.name;
+
+  const target = currentTarget();
+  applySkill(card, target);
+  G.appliedSkills.push(card);
+  G.lastSkillPlayed = card;
+  G.roundCards.push(card);
+
+  // Clamp
+  if (G.isBoss) {
+    target.pts = Math.max(1, Math.round(target.pts));
+    G.bossPlaysLeft--;
+  } else {
+    target.points = Math.max(1, Math.round(target.points));
+  }
+
+  // Remove from teammate hand
+  const cardIdx = teammate.hand.indexOf(card);
+  if (cardIdx >= 0) teammate.hand.splice(cardIdx, 1);
+
+  const pts = G.isBoss ? target.pts : target.points;
+  log(`${teammate.icon} ${teammate.name} plays ${card.icon} ${card.name} → ${pts} pts`, 'info');
+
+  G.aiTurnInProgress = false;
+  renderBattle();
+  setTimeout(() => advanceTurn(), 300);
+}
+
+// ─── AI DECISION MAKING ───
+function aiChooseAction(teammate) {
+  const target = currentTarget();
+  const pts = G.isBoss ? target.pts : target.points;
+
+  // Check if should suggest submit
+  if (shouldSuggestSubmit(teammate, pts)) {
+    return { type: 'suggest_submit' };
+  }
+
+  // No cards? Pass
+  if (!teammate.hand.length) return { type: 'pass' };
+
+  // Score each card
+  let bestCard = null;
+  let bestScore = -999;
+  teammate.hand.forEach(card => {
+    if (card.cost > G.energy) return;
+    const score = scoreCardForAI(teammate, card, pts);
+    if (score > bestScore) {
+      bestScore = score;
+      bestCard = card;
+    }
+  });
+
+  if (!bestCard || bestScore < 0) return { type: 'pass' };
+
+  // Junior: 25% chance of suboptimal pick
+  if (teammate.personality === 'junior' && Math.random() < 0.25 && teammate.hand.length > 1) {
+    const others = teammate.hand.filter(c => c !== bestCard && c.cost <= G.energy);
+    if (others.length) bestCard = others[Math.floor(Math.random() * others.length)];
+  }
+
+  G.energy -= getEffectiveCost(bestCard);
+  return { type: 'play', card: bestCard };
+}
+
+function scoreCardForAI(teammate, card, pts) {
+  let score = 0;
+  const e = card.effect;
+
+  // Base value from reduction
+  if (e.pct) score += e.pct * pts * 0.5;
+  if (e.flat) score += Math.min(e.flat, pts) * 0.5;
+  if (e.divBy) score += (pts - pts/e.divBy) * 0.4;
+  if (e.cap && pts > e.cap) score += (pts - e.cap) * 0.3;
+  if (e.energy) score += e.energy * 3;
+  if (e.moraleGain) score += e.moraleGain * 0.3;
+  if (e.satGain) score += e.satGain * 0.3;
+  if (e.moraleCost) score -= e.moraleCost * 0.2;
+  if (e.futureSatPenalty) score -= e.futureSatPenalty * 0.3;
+
+  // Personality modifiers
+  switch (teammate.personality) {
+    case 'optimizer':
+      if (e.pct || e.flat || e.divBy) score *= 1.5;
+      if (e.energy) score *= 0.7;
+      break;
+    case 'people_person':
+      if (e.moraleGain || e.energy) score *= 1.6;
+      if (e.satGain) score *= 1.3;
+      if (e.moraleCost) score *= 0.5;
+      break;
+    case 'cowboy':
+      if (e.pct && e.pct >= 0.4) score *= 1.8;
+      if (e.divBy) score *= 1.5;
+      if (e.moraleCost) score *= 1.2; // doesn't care
+      if (e.futureSatPenalty) score *= 1.3; // YOLO
+      break;
+    case 'junior':
+      if (card.cost <= 1) score *= 1.3;
+      if (card.cost >= 3) score *= 0.5;
+      if (e.pct && e.pct <= 0.3) score *= 1.2;
+      break;
+  }
+
+  // Penalize if points are already low
+  if (pts <= 5) score *= 0.3;
+  if (pts <= 3) score *= 0.1;
+
+  return score;
+}
+
+function shouldSuggestSubmit(teammate, pts) {
+  if (G.roundNum < 2) return false; // too early
+  switch (teammate.personality) {
+    case 'optimizer': return pts <= 3;
+    case 'people_person': return pts <= 5;
+    case 'cowboy': return pts <= 5 && Math.random() < 0.4;
+    case 'junior': return pts <= 3 && Math.random() < 0.5;
+    default: return pts <= 4;
+  }
+}
+
+function showSuggestSubmit(teammate) {
+  document.getElementById('suggest-who').textContent = `${teammate.icon} ${teammate.name}`;
+  document.getElementById('suggest-text').textContent = `"${teammate.quip}"`;
+  toggleOverlay('suggest-submit', true);
+}
+
+function acceptSuggestSubmit() {
+  toggleOverlay('suggest-submit', false);
+  submitEstimate();
+}
+
+function declineSuggestSubmit() {
+  toggleOverlay('suggest-submit', false);
+  log('Team keeps going.', 'info');
+  advanceTurn();
+}
+
+// ─── APPLY SKILL ───
+function applySkill(sk, target) {
+  const e = sk.effect;
+  const boost = getPassive('boostReduce');
+  const pts = () => G.isBoss ? target.pts : target.points;
+  const set = v => { if (G.isBoss) target.pts = v; else target.points = v; };
+
+  if (sk.type === 'wild' && G.lastSkillPlayed && G.lastSkillPlayed.type !== 'wild') {
+    log(`🃏 Copies ${G.lastSkillPlayed.name}!`, 'info');
+    applySkill(G.lastSkillPlayed, target);
+    return;
+  }
+  if (e.pct) { const p = e.pct + boost; const before = pts(); set(Math.floor(before * (1-p))); log(`${sk.icon} ${sk.name}: ${before} → ${pts()} (-${Math.round(p*100)}%)`, 'good'); }
+  if (e.flat) { const before = pts(); set(Math.max(1, before-e.flat)); log(`${sk.icon} ${sk.name}: ${before} → ${pts()} (-${e.flat})`, 'good'); }
+  if (e.cap && pts() > e.cap) { const before = pts(); set(e.cap); log(`${sk.icon} Capped: ${before} → ${e.cap}`, 'good'); }
+  if (e.divBy) { const before = pts(); set(Math.max(1, Math.floor(before/e.divBy))); log(`${sk.icon} ${sk.name}: ${before} → ${pts()} (÷${e.divBy})`, 'good'); }
+  if (e.setTo !== undefined) {
+    if (sk.oncePerSprint && G.usedCTOThisSprint) { log(`${sk.icon} Already used this sprint!`, 'bad'); }
+    else { const before = pts(); set(e.setTo); G.usedCTOThisSprint = true; log(`${sk.icon} ${sk.name}: ${before} → ${e.setTo}!`, 'good'); }
+  }
+  if (e.energy) { G.energy += e.energy; log(`+${e.energy} energy`, 'info'); }
+  if (e.moraleGain) { adjustTeamMood(e.moraleGain); log(`+${e.moraleGain} team mood`, 'good'); }
+  if (e.satGain) { G.satisfaction = Math.min(100, G.satisfaction + e.satGain); log(`+${e.satGain} satisfaction`, 'good'); }
+  if (e.moraleCost) { adjustTeamMood(-e.moraleCost); log(`-${e.moraleCost} team mood`, 'bad'); }
+  if (e.futureSatPenalty) { G.pendingSatPenalty += e.futureSatPenalty; log(`Tech debt: -${e.futureSatPenalty} sat next sprint`, 'bad'); }
+  if (sk.passive && !G.passives.find(p => JSON.stringify(p) === JSON.stringify(sk.passive))) {
+    G.passives.push(sk.passive);
+    log(`${sk.icon} Passive activated!`, 'info');
+  }
+  // Global passive reduction bonus (applied after main effect, not stacking with pct/flat that already ran)
+  const allR = getPassive('allReduce');
+  if (allR > 0 && (e.pct || e.flat || e.divBy)) {
+    const bonus = Math.floor(pts() * allR);
+    if (bonus > 0) { const before = pts(); set(Math.max(1, before-bonus)); log(`🤖 Automation: ${before} → ${pts()} (-${bonus})`, 'info'); }
+  }
+}
+
+function checkCombos(played, target) {
+  const ids = played.map(s => s.id);
+  const mult = G.charMod === 'techlead' ? 2 : 1;
+  const pts = () => G.isBoss ? target.pts : target.points;
+  const set = v => { if (G.isBoss) target.pts = v; else target.points = v; };
+
+  let combos = 0;
+  if (ids.includes('breakdown') && ids.includes('timebox')) {
+    set(Math.max(1, Math.floor(pts()*(1-.20*mult))));
+    log(`🔥 COMBO: Break & Time — ${20*mult}% off!`, 'good');
+    G.clout += 1; combos++;
+  }
+  if (ids.includes('pairprog') && ids.includes('spike')) {
+    set(Math.max(1, Math.floor(pts()*(1-.50*mult))));
+    log(`🔥 COMBO: Research Pair!`, 'good');
+    G.clout += 1; combos++;
+  }
+  if (ids.includes('architect') && ids.includes('automate')) {
+    set(Math.max(1, Math.floor(pts()*.3)));
+    log(`🔥 COMBO: System Design!`, 'good');
+    G.clout += 2; combos++;
+  }
+  if (ids.includes('coffee') && played.length >= 3) { G.energy += 1*mult; log(`☕ Caffeine boost!`, 'info'); combos++; }
+  if (played.length >= 3) { G.clout += 1; log(`🎯 Multi-skill round!`, 'info'); }
+  G.combosThisRun = (G.combosThisRun||0) + combos;
+}
+
+// ─── SUBMIT ESTIMATE ───
+function submitEstimate() {
+  if (G.isBoss) { submitBossPhase(); return; }
+
+  const t = G.tickets[G.ticketIdx];
+  t.done = true;
+  t.final = Math.max(1, Math.round(t.points));
+  G.sprintResults.push({ name: t.name, original: t.original, final: t.final });
+  log(`✓ ${t.name} → ${t.final} pts`, 'good');
+
+  // Teammates react
+  G.team.forEach(tm => {
+    if (tm.disconnected) return;
+    const arch = TEAMMATES.find(a => a.id === tm.personality);
+    tm.quip = t.final <= 5 ? pickQuip(arch.quips.goodResult) : pickQuip(arch.quips.badResult);
+  });
+
+  showTicketResult(t);
+}
+
+function showTicketResult(t) {
+  showScreen('result');
+  const pct = Math.round((1 - t.final/t.original)*100);
+  const good = t.final <= 5;
+  const cloutEarned = good ? 2 : t.final <= 13 ? 1 : 0;
+  G.clout += cloutEarned;
+
+  document.getElementById('result-card').innerHTML = `
+    <div class="result-title ${good?'good':t.final<=13?'neutral':'bad'}">${good?'🎯 Clean Estimate!':t.final<=13?'👍 Decent':'😬 Still Chunky'}</div>
+    <div class="result-text">${t.name}: ${t.original} → ${t.final} points (${pct}% reduction)</div>
+    <div class="result-stats">
+      <div class="r-stat"><div class="r-stat-label">Final</div><div class="r-stat-val ${good?'pos':''}">${t.final}</div></div>
+      <div class="r-stat"><div class="r-stat-label">Reduced</div><div class="r-stat-val pos">${pct}%</div></div>
+      <div class="r-stat"><div class="r-stat-label">Clout</div><div class="r-stat-val pos">+${cloutEarned}</div></div>
+    </div>
+  `;
+
+  const btn = document.getElementById('result-btn');
+  const nextTicket = G.tickets.findIndex(x => !x.done);
+  if (nextTicket >= 0) {
+    btn.textContent = '☕ Visit Breakroom';
+    btn.onclick = () => goToShop('ticket');
+  } else {
+    btn.textContent = '→ Back to Backlog';
+    btn.onclick = () => showBacklog();
+  }
+}
+
+// ─── BOSS BATTLE ───
+function startBossBattle() {
+  G.isBoss = true;
+  G.bossCurrentPhase = 0;
+  G.bossPlaysLeft = 16 + G.sprint * 2;
+  G.appliedSkills = [];
+  G.log = [];
+
+  const baseP = 15 + G.sprint * 15;
+  G.bossPhases = [
+    { label:'Discovery', pts: baseP + Math.floor(Math.random()*G.sprint*8), original:0, done:false },
+    { label:'Implementation', pts: baseP + Math.floor(Math.random()*G.sprint*12), original:0, done:false },
+    { label:'Integration', pts: baseP + Math.floor(Math.random()*G.sprint*10), original:0, done:false },
+  ];
+  if (G.charMod === 'exec') G.bossPhases.forEach(p => p.pts = Math.floor(p.pts*1.2));
+  G.bossPhases.forEach(p => p.original = p.pts);
+
+  resetEnergy();
+  dealHand();
+  dealTeamHands();
+  setupTurnOrder();
+  showScreen('battle');
+  renderBattle();
+}
+
+function submitBossPhase() {
+  const phase = G.bossPhases[G.bossCurrentPhase];
+  phase.pts = Math.max(1, Math.round(phase.pts));
+  phase.done = true;
+  G.sprintResults.push({ name: `${G.epic.name} P${G.bossCurrentPhase+1}`, original: phase.original, final: phase.pts });
+  log(`✓ Phase ${G.bossCurrentPhase+1} → ${phase.pts}`, 'good');
+
+  if (G.bossCurrentPhase < 2) {
+    G.bossCurrentPhase++;
+    G.appliedSkills = [];
+    setupTurnOrder();
+    renderBattle();
+  } else {
+    showBossResult();
+  }
+}
+
+function showBossResult() {
+  const totalOrig = G.bossPhases.reduce((s,p) => s+p.original, 0);
+  const totalFinal = G.bossPhases.reduce((s,p) => s+p.pts, 0);
+  const pct = Math.round((1-totalFinal/totalOrig)*100);
+  const good = totalFinal/3 <= 5;
+  const cloutEarned = good ? 5 : totalFinal/3 <= 13 ? 3 : 1;
+  G.clout += cloutEarned;
+
+  showScreen('result');
+  document.getElementById('result-card').innerHTML = `
+    <div class="result-title ${good?'good':totalFinal/3<=13?'neutral':'bad'}">⚔️ ${good?'Epic Conquered!':totalFinal/3<=13?'Epic Tamed':'Epic Survived'}</div>
+    <div class="result-text">${G.epic.name}: ${totalOrig} → ${totalFinal} total points across 3 phases</div>
+    <div class="result-stats">
+      ${G.bossPhases.map((p,i) => `<div class="r-stat"><div class="r-stat-label">Phase ${i+1}</div><div class="r-stat-val ${p.pts<=5?'pos':''}">${p.pts}</div></div>`).join('')}
+      <div class="r-stat"><div class="r-stat-label">Clout</div><div class="r-stat-val pos">+${cloutEarned}</div></div>
+    </div>
+  `;
+  document.getElementById('result-btn').textContent = '→ Sprint Resolution';
+  document.getElementById('result-btn').onclick = () => sprintResolution();
+}
+
+// ─── INTERRUPTION ───
+function triggerInterruption() {
+  const intr = INTERRUPTIONS[Math.floor(Math.random()*INTERRUPTIONS.length)];
+  document.getElementById('int-icon').textContent = intr.icon;
+  document.getElementById('int-text').textContent = intr.text;
+  const cd = document.getElementById('int-choices');
+  cd.innerHTML = '';
+  intr.choices.forEach(ch => {
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-dim btn-sm';
+    btn.textContent = ch.label;
+    btn.onclick = () => {
+      ch.effect(G);
+      toggleOverlay('interrupt', false);
+      // Teammates react to interruption
+      G.team.forEach(tm => {
+        if (tm.disconnected) return;
+        const arch = TEAMMATES.find(a => a.id === tm.personality);
+        tm.quip = pickQuip(arch.quips.interruption);
+      });
+      renderBattle();
+    };
+    cd.appendChild(btn);
+  });
+  toggleOverlay('interrupt', true);
+}
+
+// ─── SPRINT RESOLUTION ───
+function sprintResolution() {
+  showScreen('sprintres');
+
+  const totalOrig = G.sprintResults.reduce((s,r)=>s+r.original,0);
+  const totalFinal = G.sprintResults.reduce((s,r)=>s+r.final,0);
+  const avg = totalFinal / G.sprintResults.length;
+
+  let moodD = 0, satD = 0, title = '', text = '', cls = '';
+
+  if (avg <= 5 && avg >= 1) {
+    moodD=12; satD=8; title='🎯 Perfect Sprint!'; cls='good';
+    text=`Average: ${avg.toFixed(1)} pts. The sweet spot! Team is energized, leadership is thrilled.`;
+  } else if (avg <= 8) {
+    moodD=5; satD=10; title='👍 Solid Sprint'; cls='good';
+    text=`Average: ${avg.toFixed(1)} pts. Manageable scope. Good progress visible to all.`;
+  } else if (avg <= 13) {
+    moodD=-8; satD=3; title='😓 Rough Sprint'; cls='neutral';
+    text=`Average: ${avg.toFixed(1)} pts. ${G.team.filter(t=>!t.disconnected).map(t=>t.name).join(' and ')} look${G.team.filter(t=>!t.disconnected).length===1?'s':''} stressed.`;
+  } else if (avg <= 21) {
+    moodD=-18; satD=-8; title='😰 Death March'; cls='bad';
+    text=`Average: ${avg.toFixed(1)} pts. Unrealistic scope. ${G.team.find(t=>!t.disconnected)?.name || 'Everyone'} is burning out.`;
+  } else {
+    moodD=-28; satD=-18; title='💀 Sprint From Hell'; cls='bad';
+    text=`Average: ${avg.toFixed(1)} pts. Nobody believes these estimates. Crisis mode.`;
+  }
+
+  if (avg < 2) { satD -= 12; text += ' ⚠️ Leadership suspects sandbagging.'; }
+
+  adjustTeamMood(moodD);
+  G.satisfaction = Math.min(100, Math.max(0, G.satisfaction + satD));
+
+  // New hire event between sprints if team is short
+  const activeCount = G.team.filter(t => !t.disconnected).length;
+  if (activeCount < 2 && G.sprint < G.maxSprints) {
+    // Add a new teammate
+    const usedIds = G.team.map(t => t.personality);
+    const available = TEAMMATES.filter(a => !usedIds.includes(a.id));
+    if (available.length) {
+      const newHire = available[Math.floor(Math.random() * available.length)];
+      G.team.push({
+        name: newHire.name, role: newHire.role, icon: newHire.icon,
+        personality: newHire.id, mood: 65, disconnected: false,
+        hand: [], cardPool: newHire.baseCards.map(id => ({...SKILLS.find(s => s.id === id)})),
+        quip: 'Hey everyone! Happy to be here!',
+      });
+      text += ` 🆕 ${newHire.name} (${newHire.role}) has joined the team!`;
+    }
+  }
+
+  // Check unlocks
+  checkUnlocks(avg);
+
+  document.getElementById('sr-title').textContent = title;
+  document.getElementById('sr-title').className = `sprint-res-title`;
+  document.getElementById('sr-title').style.color = cls==='good'?'var(--green)':cls==='bad'?'var(--red)':'var(--gold)';
+  document.getElementById('sr-text').textContent = text;
+  document.getElementById('sr-stats').innerHTML = `
+    <div class="r-stat"><div class="r-stat-label">Total Original</div><div class="r-stat-val">${totalOrig}</div></div>
+    <div class="r-stat"><div class="r-stat-label">Total Final</div><div class="r-stat-val ${totalFinal<totalOrig*.3?'pos':''}">${totalFinal}</div></div>
+    <div class="r-stat"><div class="r-stat-label">Team Mood</div><div class="r-stat-val ${moodD>=0?'pos':'neg'}">${moodD>=0?'+':''}${moodD}</div></div>
+    <div class="r-stat"><div class="r-stat-label">Satisfaction</div><div class="r-stat-val ${satD>=0?'pos':'neg'}">${satD>=0?'+':''}${satD}%</div></div>
+  `;
+
+  const btn = document.getElementById('sr-btn');
+  const allDisconnected = G.team.every(t => t.disconnected);
+  if (allDisconnected) { gameOver('morale'); return; }
+  if (G.satisfaction <= 0) { gameOver('satisfaction'); return; }
+
+  if (G.sprint >= G.maxSprints) {
+    btn.textContent = '🏆 See Final Results';
+    btn.onclick = () => winGame();
+  } else {
+    btn.textContent = '☕ Breakroom → Next Sprint';
+    btn.onclick = () => goToShop('sprint');
+  }
+}
+
+function checkUnlocks(avg) {
+  if (G.sprint >= 3) saveUnlock('manager');
+  if (avg <= 5 && avg >= 1) saveUnlock('po');
+  if ((G.combosThisRun||0) >= 3) saveUnlock('techlead');
+}
+
+// ─── SHOP ───
+function goToShop(context) {
+  showScreen('shop');
+  document.getElementById('shop-clout').textContent = `💰 ${G.clout} Clout`;
+  populateShop();
+}
+
+function populateShop() {
+  const grid = document.getElementById('shop-grid');
+  grid.innerHTML = '';
+  const owned = G.deck.map(s => s.id);
+  const avail = SKILLS.filter(s => !owned.includes(s.id));
+  const weights = {common:40,uncommon:30,rare:20,epic:8,legendary:2};
+
+  const items = [];
+  const pool = [...avail];
+  for (let i = 0; i < 4 && pool.length; i++) {
+    const tw = pool.reduce((s,sk)=>s+(weights[sk.rarity]||10),0);
+    let roll = Math.random()*tw;
+    let pick = pool[0];
+    for (const sk of pool) { roll -= (weights[sk.rarity]||10); if (roll<=0){pick=sk;break;} }
+    items.push(pick);
+    pool.splice(pool.indexOf(pick),1);
+  }
+
+  items.forEach(sk => {
+    const div = document.createElement('div');
+    div.className = `shop-item skill-card ${sk.rarity}`;
+    div.style.width='170px'; div.style.height='auto';
+    div.innerHTML = `
+      <div class="sk-rarity">${sk.rarity}</div>
+      <div class="sk-icon">${sk.icon}</div>
+      <div class="sk-name">${sk.name}</div>
+      <div class="sk-desc">${sk.desc}</div>
+      <div class="shop-price">💰 ${sk.price}</div>
+    `;
+    div.onclick = () => buySkill(sk, div);
+    grid.appendChild(div);
+  });
+}
+
+function buySkill(sk, el) {
+  if (G.clout < sk.price) { el.classList.add('shake'); setTimeout(()=>el.classList.remove('shake'),300); return; }
+  G.clout -= sk.price;
+  G.deck.push({...sk});
+  if (sk.passive) G.passives.push(sk.passive);
+  el.classList.add('sold');
+  el.querySelector('.shop-price').textContent = '✓ BOUGHT';
+  document.getElementById('shop-clout').textContent = `💰 ${G.clout} Clout`;
+}
+
+function rerollShop() {
+  if (G.clout < 2) return;
+  G.clout -= 2;
+  document.getElementById('shop-clout').textContent = `💰 ${G.clout} Clout`;
+  populateShop();
+}
+
+function leaveShop() {
+  const ticketsRemain = G.tickets.some(t => !t.done);
+  const bossNotDone = !G.isBoss && G.sprintResults.length <= G.tickets.length;
+  if (ticketsRemain || bossNotDone) {
+    showBacklog();
+  } else {
+    G.sprint++;
+    // Grow teammate card pools between sprints
+    G.team.forEach(t => {
+      if (t.disconnected) return;
+      const allCards = SKILLS.filter(s => !t.cardPool.find(c => c.id === s.id) && s.rarity !== 'legendary');
+      if (allCards.length) {
+        const newCard = allCards[Math.floor(Math.random() * allCards.length)];
+        t.cardPool.push({...newCard});
+      }
+    });
+    startSprint();
+  }
+}
+
+// ─── GAME OVER ───
+function gameOver(reason) {
+  showScreen('endgame');
+  const t = document.getElementById('end-title');
+  if (reason === 'morale') {
+    t.textContent = '📴 TEAM REVOLT'; t.style.color='var(--red)';
+    const names = G.team.map(tm => tm.name).join(', ');
+    document.getElementById('end-text').textContent = `The standup is empty. ${names} — all disconnected. After weeks of unrealistic estimates, your entire team has collectively updated their LinkedIn to "Open to Work." Your Scrum Master cert has been revoked.`;
+  } else {
+    t.textContent = '📉 PERFORMANCE REVIEW'; t.style.color='var(--red)';
+    document.getElementById('end-text').textContent = 'Leadership has lost confidence. "We need someone who can deliver real velocity," they said. Your badge has been deactivated. Your standing desk reassigned.';
+  }
+  document.getElementById('end-stats').innerHTML = `
+    <div class="r-stat"><div class="r-stat-label">Sprints</div><div class="r-stat-val">${G.sprint}</div></div>
+    <div class="r-stat"><div class="r-stat-label">Skills</div><div class="r-stat-val">${G.deck.length}</div></div>
+    <div class="r-stat"><div class="r-stat-label">Team Mood</div><div class="r-stat-val">${teamMorale()}%</div></div>
+    <div class="r-stat"><div class="r-stat-label">Satisfaction</div><div class="r-stat-val">${Math.round(G.satisfaction)}%</div></div>
+  `;
+}
+
+function winGame() {
+  saveUnlock('founder');
+  if (teamMorale() > 80 && G.satisfaction > 80) saveUnlock('exec');
+
+  showScreen('endgame');
+  const t = document.getElementById('end-title');
+  t.textContent = '🏆 PROMOTED!'; t.style.color='var(--gold)';
+  const activeNames = G.team.filter(tm => !tm.disconnected).map(tm => tm.name).join(', ');
+  document.getElementById('end-text').textContent = `You survived ${G.maxSprints} sprints with your team (${activeNames}) intact. They respect you, leadership trusts your estimates, and you've mastered the art of making 1000-point epics look like quick wins. Promoted to Director of Agile Excellence. God help you.`;
+  document.getElementById('end-stats').innerHTML = `
+    <div class="r-stat"><div class="r-stat-label">Team Mood</div><div class="r-stat-val pos">${teamMorale()}%</div></div>
+    <div class="r-stat"><div class="r-stat-label">Satisfaction</div><div class="r-stat-val pos">${Math.round(G.satisfaction)}%</div></div>
+    <div class="r-stat"><div class="r-stat-label">Clout</div><div class="r-stat-val pos">${G.clout}</div></div>
+    <div class="r-stat"><div class="r-stat-label">Skills</div><div class="r-stat-val pos">${G.deck.length}</div></div>
+    <div class="r-stat"><div class="r-stat-label">Combos</div><div class="r-stat-val pos">${G.combosThisRun||0}</div></div>
+  `;
+}
+
+// ─── HELPERS ───
+function log(m, t='info') { G.log.push({m,t}); if(G.log.length>50)G.log.shift(); }
+</script>
+</body>
+</html>
