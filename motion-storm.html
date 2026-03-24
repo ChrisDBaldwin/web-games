@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Motion Storm</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0a0f; overflow: hidden; font-family: 'Segoe UI', system-ui, sans-serif; }
+  canvas { display: block; }
+
+  .overlay {
+    position: fixed; inset: 0; z-index: 100;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: linear-gradient(135deg, #0a0a1a 0%, #1a0a2a 50%, #0a1a2a 100%);
+    transition: opacity 0.5s;
+  }
+  .overlay.hidden { opacity: 0; pointer-events: none; }
+  .overlay h1 {
+    font-size: clamp(2.5rem, 6vw, 4.5rem); font-weight: 800; letter-spacing: -2px;
+    background: linear-gradient(135deg, #ff6af0, #6ae8ff, #ffe76a);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    margin-bottom: 0.3rem;
+  }
+  .overlay .tagline { color: #8888aa; font-size: 1.1rem; margin-bottom: 0.5rem; }
+  .overlay .how-to {
+    color: #6668; font-size: 0.85rem; max-width: 340px; text-align: center;
+    margin-bottom: 2rem; line-height: 1.5;
+  }
+  .overlay .how-to strong { color: #aab; }
+
+  .big-btn {
+    padding: 16px 48px; font-size: 1.2rem; font-weight: 600;
+    border: none; border-radius: 50px; cursor: pointer;
+    background: linear-gradient(135deg, #ff6af0, #6ae8ff);
+    color: #0a0a1a; transition: transform 0.2s, box-shadow 0.2s;
+    box-shadow: 0 0 30px rgba(106, 232, 255, 0.3);
+  }
+  .big-btn:hover { transform: scale(1.05); box-shadow: 0 0 50px rgba(106, 232, 255, 0.5); }
+
+  #cam-error {
+    display: none; color: #ff6a6a; margin-top: 1rem;
+    padding: 12px 24px; border-radius: 8px; background: rgba(255,106,106,0.1); font-size: 0.9rem;
+  }
+
+  /* Game Over */
+  #game-over { background: rgba(5, 5, 15, 0.92); }
+  #game-over h1 { margin-bottom: 0.8rem; }
+  .stat-grid { display: flex; gap: 2rem; margin-bottom: 2rem; }
+  .stat { text-align: center; }
+  .stat .label { color: #666; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; }
+  .stat .value { color: #6ae8ff; font-size: 2rem; font-weight: 700; }
+  .stat .value.gold { color: #ffe76a; }
+  .new-best { color: #ffe76a; font-size: 0.9rem; margin-bottom: 1rem; }
+
+  /* HUD */
+  #hud {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+    display: none; padding: 12px 20px;
+    pointer-events: none;
+  }
+  #hud.visible { display: flex; justify-content: space-between; align-items: flex-start; }
+  .hud-left, .hud-right, .hud-center { display: flex; flex-direction: column; gap: 4px; }
+  .hud-center { align-items: center; }
+  .hud-right { align-items: flex-end; }
+  .hud-score { color: #fff; font-size: 2.2rem; font-weight: 800; letter-spacing: -1px; text-shadow: 0 0 20px rgba(106,232,255,0.5); }
+  .hud-combo { color: #ffe76a; font-size: 0.9rem; font-weight: 600; opacity: 0; transition: opacity 0.3s; }
+  .hud-combo.visible { opacity: 1; }
+  .hud-hearts { font-size: 1.5rem; letter-spacing: 2px; }
+  .hud-wave { color: #6ae8ff; font-size: 0.85rem; font-weight: 600; }
+  .hud-label { color: #666; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px; }
+</style>
+</head>
+<body>
+
+<div id="start-screen" class="overlay">
+  <h1>Motion Storm</h1>
+  <p class="tagline">A webcam-powered physics game</p>
+  <p class="how-to">
+    <strong>Balls rain from the sky.</strong> Move your body to push them into the golden score rings.
+    Don't let them hit the floor!
+  </p>
+  <button class="big-btn" id="start-btn">Enable Camera & Play</button>
+  <div id="cam-error"></div>
+</div>
+
+<div id="game-over" class="overlay hidden">
+  <h1>Game Over</h1>
+  <div class="stat-grid">
+    <div class="stat"><div class="label">Score</div><div class="value" id="final-score">0</div></div>
+    <div class="stat"><div class="label">Best</div><div class="value gold" id="best-score">0</div></div>
+    <div class="stat"><div class="label">Wave</div><div class="value" id="final-wave">1</div></div>
+    <div class="stat"><div class="label">Rings Hit</div><div class="value" id="final-rings">0</div></div>
+  </div>
+  <div class="new-best hidden" id="new-best">New High Score!</div>
+  <button class="big-btn" id="restart-btn">Play Again</button>
+</div>
+
+<canvas id="main"></canvas>
+
+<div id="hud">
+  <div class="hud-left">
+    <div class="hud-hearts" id="hearts"></div>
+    <div class="hud-label">Lives</div>
+  </div>
+  <div class="hud-center">
+    <div class="hud-score" id="score-display">0</div>
+    <div class="hud-combo" id="combo-display">x1</div>
+  </div>
+  <div class="hud-right">
+    <div class="hud-wave" id="wave-display">Wave 1</div>
+    <div class="hud-label" id="balls-label">0 balls</div>
+  </div>
+</div>
+
+<script>
+// ── Configuration ──
+const CFG = {
+  processScale: 0.2,       // higher res = better motion detection
+  gridSize: 8,             // finer grid = more precise forces
+  motionThreshold: 12,     // lower = detects subtler movement
+  motionDecay: 0.6,
+  forceRadius: 120,        // much larger area of influence
+  forceStrength: 4.0,      // 3x stronger — you are a god of wind
+  gravity: 0.07,           // gentler gravity
+  damping: 0.985,
+  bounce: 0.6,
+  maxObjects: 400,
+  trailAlpha: 0.16,
+  floorHeight: 6,
+  startLives: 7,
+  maxLives: 10,
+  waveDuration: 30,        // longer waves, more breathing room
+  baseSpawnRate: 1.0,      // slower start
+  spawnRateGrowth: 0.6,    // gentler ramp
+  ringCount: 3,            // more rings = more chances to score
+  ringRadius: 55,          // bigger rings = easier targets
+  ringDuration: 8,         // rings stay longer
+  ringPoints: 100,
+  bombChance: 0.05,        // fewer bombs early
+  goldChance: 0.08,
+  heartChance: 0.05,       // more hearts
+};
+
+// ── State ──
+const STATE = { MENU: 0, PLAYING: 1, GAME_OVER: 2 };
+let gameState = STATE.MENU;
+let canvas, ctx;
+let video, procCanvas, procCtx;
+let prevImageData = null;
+let motionGrid = null;
+let gridCols = 0, gridRows = 0;
+let procW = 0, procH = 0;
+let scaleX = 1, scaleY = 1;
+let camReady = false;
+
+// Game state
+let balls = [];
+let rings = [];
+let particles = [];
+let floatingTexts = [];
+let lives = CFG.startLives;
+let score = 0;
+let displayScore = 0;
+let combo = 1;
+let wave = 1;
+let waveTimer = 0;
+let spawnAccum = 0;
+let globalHue = 0;
+let ringsHit = 0;
+let shakeAmount = 0;
+let floorGlow = 0;
+let lastTime = 0;
+let bestScore = parseInt(localStorage.getItem('motionStormBest') || '0');
+
+// ── Ball Types ──
+const BALL_TYPE = { NORMAL: 0, GOLD: 1, BOMB: 2, HEART: 3 };
+
+class Ball {
+  constructor(x, y, r, type) {
+    this.x = x; this.y = y;
+    this.px = x + (Math.random() - 0.5) * 2;
+    this.py = y;
+    this.r = r;
+    this.type = type;
+    this.alpha = 0;
+    this.alive = true;
+    this.age = 0;
+    globalHue = (globalHue + 3.7) % 360;
+    this.hue = type === BALL_TYPE.GOLD ? 45 : type === BALL_TYPE.BOMB ? 0 : type === BALL_TYPE.HEART ? 340 : globalHue;
+    this.sat = type === BALL_TYPE.BOMB ? 70 : 75 + Math.random() * 25;
+    this.light = type === BALL_TYPE.GOLD ? 60 : type === BALL_TYPE.BOMB ? 45 : 55 + Math.random() * 15;
+    this.pulsePhase = Math.random() * Math.PI * 2;
+  }
+
+  update(dt) {
+    if (this.alpha < 1) this.alpha = Math.min(1, this.alpha + 0.06);
+    this.age += dt;
+    this.pulsePhase += dt * 4;
+
+    let vx = (this.x - this.px) * CFG.damping;
+    let vy = (this.y - this.py) * CFG.damping;
+    this.px = this.x; this.py = this.y;
+    this.x += vx; this.y += vy + CFG.gravity;
+
+    if (motionGrid) this.applyMotionForces();
+
+    // Wall bounce (sides + top)
+    if (this.x < this.r) { this.x = this.r; this.px = this.x + vx * CFG.bounce; }
+    if (this.x > canvas.width - this.r) { this.x = canvas.width - this.r; this.px = this.x + vx * CFG.bounce; }
+    if (this.y < this.r) { this.y = this.r; this.py = this.y + vy * CFG.bounce; }
+
+    // Floor collision → lose life
+    const floorY = canvas.height - CFG.floorHeight;
+    if (this.y + this.r >= floorY) {
+      this.alive = false;
+      onBallHitFloor(this);
+    }
+  }
+
+  applyMotionForces() {
+    const gi = Math.floor((this.x / scaleX) / CFG.gridSize);
+    const gj = Math.floor((this.y / scaleY) / CFG.gridSize);
+    const range = Math.ceil(CFG.forceRadius / (CFG.gridSize * scaleX));
+    let fx = 0, fy = 0;
+    for (let dj = -range; dj <= range; dj++) {
+      for (let di = -range; di <= range; di++) {
+        const ci = gi + di, cj = gj + dj;
+        if (ci < 0 || ci >= gridCols || cj < 0 || cj >= gridRows) continue;
+        const motion = motionGrid[cj * gridCols + ci];
+        if (motion < CFG.motionThreshold) continue;
+        const cx = (ci + 0.5) * CFG.gridSize * scaleX;
+        const cy = (cj + 0.5) * CFG.gridSize * scaleY;
+        const dx = this.x - cx, dy = this.y - cy;
+        const distSq = dx * dx + dy * dy;
+        if (distSq > CFG.forceRadius * CFG.forceRadius || distSq < 1) continue;
+        const dist = Math.sqrt(distSq);
+        const strength = (motion / 255) * CFG.forceStrength * (1 - dist / CFG.forceRadius);
+        fx += (dx / dist) * strength;
+        fy += (dy / dist) * strength;
+      }
+    }
+    this.x += fx; this.y += fy;
+  }
+
+  draw(ctx) {
+    const speed = Math.hypot(this.x - this.px, this.y - this.py);
+    const pulse = this.type === BALL_TYPE.BOMB ? Math.sin(this.pulsePhase) * 0.3 + 0.7 : 1;
+    const glow = Math.min(25, 5 + speed * 2) * pulse;
+    const r = this.r * (this.type === BALL_TYPE.BOMB ? 0.9 + Math.sin(this.pulsePhase) * 0.1 : 1);
+
+    let color;
+    if (this.type === BALL_TYPE.GOLD) {
+      color = `hsla(${45 + Math.sin(this.pulsePhase) * 10}, 90%, 65%, ${this.alpha})`;
+    } else if (this.type === BALL_TYPE.BOMB) {
+      color = `hsla(${0 + Math.sin(this.pulsePhase * 2) * 15}, 75%, ${40 + Math.sin(this.pulsePhase) * 10}%, ${this.alpha})`;
+    } else if (this.type === BALL_TYPE.HEART) {
+      color = `hsla(340, 80%, 65%, ${this.alpha})`;
+    } else {
+      color = `hsla(${this.hue}, ${this.sat}%, ${this.light}%, ${this.alpha})`;
+    }
+
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = glow;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // Icon for special types
+    if (this.type === BALL_TYPE.BOMB && this.r > 6) {
+      ctx.fillStyle = `rgba(255,200,100,${this.alpha * 0.9})`;
+      ctx.font = `${r * 1.1}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('*', this.x, this.y + 1);
+    }
+    if (this.type === BALL_TYPE.HEART && this.r > 6) {
+      ctx.fillStyle = `rgba(255,255,255,${this.alpha * 0.9})`;
+      ctx.font = `${r * 0.9}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('+', this.x, this.y);
+    }
+    if (this.type === BALL_TYPE.GOLD && this.r > 6) {
+      ctx.fillStyle = `rgba(255,255,220,${this.alpha * 0.8})`;
+      ctx.font = `bold ${r * 0.9}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('$', this.x, this.y + 1);
+    }
+  }
+}
+
+// ── Score Ring ──
+class ScoreRing {
+  constructor() { this.respawn(); }
+
+  respawn() {
+    const pad = CFG.ringRadius + 40;
+    this.x = pad + Math.random() * (canvas.width - pad * 2);
+    this.y = pad + Math.random() * (canvas.height * 0.6 - pad);
+    this.timer = CFG.ringDuration;
+    this.alpha = 0;
+    this.pulse = Math.random() * Math.PI * 2;
+    this.collected = false;
+  }
+
+  update(dt) {
+    this.timer -= dt;
+    this.pulse += dt * 3;
+    if (this.timer > CFG.ringDuration - 0.5) {
+      this.alpha = Math.min(1, this.alpha + dt * 3);
+    } else if (this.timer < 1) {
+      this.alpha = Math.max(0, this.timer);
+    } else {
+      this.alpha = 1;
+    }
+    if (this.timer <= 0) this.respawn();
+  }
+
+  draw(ctx) {
+    const r = CFG.ringRadius + Math.sin(this.pulse) * 4;
+    const a = this.alpha * 0.7;
+
+    // Outer glow
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, r + 8, 0, Math.PI * 2);
+    ctx.strokeStyle = `hsla(45, 80%, 60%, ${a * 0.2})`;
+    ctx.lineWidth = 12;
+    ctx.stroke();
+
+    // Ring
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, r, 0, Math.PI * 2);
+    ctx.strokeStyle = `hsla(45, 85%, 65%, ${a})`;
+    ctx.shadowColor = `hsla(45, 85%, 65%, ${a})`;
+    ctx.shadowBlur = 15;
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // Inner fill
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = `hsla(45, 70%, 60%, ${a * 0.06})`;
+    ctx.fill();
+
+    // Points label
+    ctx.fillStyle = `hsla(45, 80%, 70%, ${a * 0.6})`;
+    ctx.font = `bold 14px system-ui`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(`+${CFG.ringPoints}`, this.x, this.y);
+  }
+
+  contains(ball) {
+    const dx = ball.x - this.x, dy = ball.y - this.y;
+    return Math.sqrt(dx * dx + dy * dy) + ball.r < CFG.ringRadius && this.alpha > 0.5;
+  }
+}
+
+// ── Particles ──
+class Particle {
+  constructor(x, y, hue, speed) {
+    this.x = x; this.y = y;
+    const angle = Math.random() * Math.PI * 2;
+    const v = speed * (0.5 + Math.random());
+    this.vx = Math.cos(angle) * v;
+    this.vy = Math.sin(angle) * v;
+    this.life = 1;
+    this.decay = 0.015 + Math.random() * 0.025;
+    this.hue = hue;
+    this.r = 1.5 + Math.random() * 2.5;
+  }
+  update() {
+    this.x += this.vx; this.y += this.vy;
+    this.vy += 0.06;
+    this.vx *= 0.98; this.vy *= 0.98;
+    this.life -= this.decay;
+  }
+  draw(ctx) {
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.r * this.life, 0, Math.PI * 2);
+    ctx.fillStyle = `hsla(${this.hue}, 80%, 60%, ${this.life * 0.8})`;
+    ctx.fill();
+  }
+}
+
+class FloatingText {
+  constructor(x, y, text, color) {
+    this.x = x; this.y = y; this.text = text; this.color = color;
+    this.life = 1; this.vy = -1.5;
+  }
+  update() { this.y += this.vy; this.vy *= 0.97; this.life -= 0.018; }
+  draw(ctx) {
+    ctx.fillStyle = this.color.replace('1)', `${this.life})`);
+    ctx.font = 'bold 18px system-ui';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.shadowColor = this.color.replace('1)', '0.5)');
+    ctx.shadowBlur = 8;
+    ctx.fillText(this.text, this.x, this.y);
+    ctx.shadowBlur = 0;
+  }
+}
+
+// ── Camera + Motion Detection ──
+function setupCanvas() {
+  canvas = document.getElementById('main');
+  ctx = canvas.getContext('2d');
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  window.addEventListener('resize', () => {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    if (video && video.videoWidth) updateProcessDimensions();
+  });
+}
+
+function updateProcessDimensions() {
+  procW = Math.floor(video.videoWidth * CFG.processScale);
+  procH = Math.floor(video.videoHeight * CFG.processScale);
+  if (procW < 1) procW = 80;
+  if (procH < 1) procH = 60;
+  procCanvas.width = procW;
+  procCanvas.height = procH;
+  scaleX = canvas.width / procW;
+  scaleY = canvas.height / procH;
+  gridCols = Math.ceil(procW / CFG.gridSize);
+  gridRows = Math.ceil(procH / CFG.gridSize);
+  motionGrid = new Float32Array(gridCols * gridRows);
+  prevImageData = null;
+}
+
+async function initCamera() {
+  video = document.createElement('video');
+  video.setAttribute('playsinline', '');
+  video.setAttribute('autoplay', '');
+  video.muted = true;
+
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }
+  });
+  video.srcObject = stream;
+  await new Promise(resolve => {
+    video.onloadedmetadata = () => video.play().then(resolve);
+  });
+  // Extra safety: wait for dimensions
+  while (!video.videoWidth) await new Promise(r => setTimeout(r, 50));
+
+  procCanvas = document.createElement('canvas');
+  procCtx = procCanvas.getContext('2d', { willReadFrequently: true });
+  updateProcessDimensions();
+  camReady = true;
+}
+
+function processMotion() {
+  if (!camReady || !video.videoWidth) return;
+  procCtx.save();
+  procCtx.translate(procW, 0);
+  procCtx.scale(-1, 1);
+  procCtx.drawImage(video, 0, 0, procW, procH);
+  procCtx.restore();
+
+  const currentData = procCtx.getImageData(0, 0, procW, procH);
+  if (!prevImageData) { prevImageData = currentData; return; }
+
+  const curr = currentData.data, prev = prevImageData.data;
+  for (let i = 0; i < motionGrid.length; i++) motionGrid[i] *= CFG.motionDecay;
+
+  for (let y = 0; y < procH; y++) {
+    const gj = Math.floor(y / CFG.gridSize);
+    for (let x = 0; x < procW; x++) {
+      const idx = (y * procW + x) * 4;
+      const diff = (Math.abs(curr[idx] - prev[idx]) + Math.abs(curr[idx+1] - prev[idx+1]) + Math.abs(curr[idx+2] - prev[idx+2])) / 3;
+      if (diff > CFG.motionThreshold) {
+        const gi = Math.floor(x / CFG.gridSize);
+        if (gi < gridCols && gj < gridRows)
+          motionGrid[gj * gridCols + gi] = Math.min(255, motionGrid[gj * gridCols + gi] + diff * 1.2);
+      }
+    }
+  }
+  prevImageData = currentData;
+}
+
+// ── Game Logic ──
+function startGame() {
+  balls = []; rings = []; particles = []; floatingTexts = [];
+  lives = CFG.startLives; score = 0; displayScore = 0; combo = 1;
+  wave = 1; waveTimer = 0; spawnAccum = 0; ringsHit = 0;
+  shakeAmount = 0; floorGlow = 0;
+  for (let i = 0; i < CFG.ringCount; i++) rings.push(new ScoreRing());
+  gameState = STATE.PLAYING;
+  document.getElementById('hud').classList.add('visible');
+  updateHUD();
+}
+
+function endGame() {
+  gameState = STATE.GAME_OVER;
+  document.getElementById('hud').classList.remove('visible');
+  const isNewBest = score > bestScore;
+  if (isNewBest) { bestScore = score; localStorage.setItem('motionStormBest', String(score)); }
+  document.getElementById('final-score').textContent = Math.floor(score);
+  document.getElementById('best-score').textContent = Math.floor(bestScore);
+  document.getElementById('final-wave').textContent = wave;
+  document.getElementById('final-rings').textContent = ringsHit;
+  const nb = document.getElementById('new-best');
+  nb.classList.toggle('hidden', !isNewBest);
+  document.getElementById('game-over').classList.remove('hidden');
+}
+
+function onBallHitFloor(ball) {
+  const damage = ball.type === BALL_TYPE.BOMB ? 2 : ball.type === BALL_TYPE.HEART ? 0 : 1;
+  if (ball.type === BALL_TYPE.HEART) {
+    // Heart hits floor — still grants life
+    lives = Math.min(CFG.maxLives, lives + 1);
+    spawnParticles(ball.x, ball.y, 340, 12, 3);
+    floatingTexts.push(new FloatingText(ball.x, ball.y, '+1 Life', 'hsla(340,80%,65%,1)'));
+  } else {
+    lives -= damage;
+    shakeAmount = damage * 8;
+    floorGlow = 1;
+    const hue = ball.type === BALL_TYPE.BOMB ? 0 : ball.hue;
+    spawnParticles(ball.x, canvas.height - CFG.floorHeight, hue, 15, 4);
+    if (damage >= 2) floatingTexts.push(new FloatingText(ball.x, ball.y, `-${damage} Lives!`, 'hsla(0,80%,60%,1)'));
+  }
+  updateHUD();
+  if (lives <= 0) endGame();
+}
+
+function onBallHitRing(ball, ring) {
+  const multiplier = ball.type === BALL_TYPE.GOLD ? 5 : ball.type === BALL_TYPE.BOMB ? 0 : 1;
+  if (ball.type === BALL_TYPE.BOMB) {
+    // Bomb in ring — defuse! Bonus points, no penalty
+    score += 200 * combo;
+    floatingTexts.push(new FloatingText(ring.x, ring.y, `+${200 * combo} Defuse!`, 'hsla(30,90%,60%,1)'));
+    spawnParticles(ring.x, ring.y, 30, 25, 5);
+  } else {
+    const pts = CFG.ringPoints * multiplier * combo;
+    score += pts;
+    floatingTexts.push(new FloatingText(ring.x, ring.y, `+${pts}`, 'hsla(45,85%,65%,1)'));
+    spawnParticles(ring.x, ring.y, ball.type === BALL_TYPE.GOLD ? 45 : ball.hue, 20, 5);
+  }
+  ringsHit++;
+  ball.alive = false;
+  ring.respawn();
+}
+
+function spawnParticles(x, y, hue, count, speed) {
+  for (let i = 0; i < count; i++) particles.push(new Particle(x, y, hue, speed));
+}
+
+function spawnBall() {
+  if (balls.length >= CFG.maxObjects) return;
+  const x = 30 + Math.random() * (canvas.width - 60);
+  const r = 6 + Math.random() * 10;
+  const roll = Math.random();
+  let type = BALL_TYPE.NORMAL;
+  if (roll < CFG.bombChance + wave * 0.01) type = BALL_TYPE.BOMB;
+  else if (roll < CFG.bombChance + CFG.goldChance + wave * 0.005) type = BALL_TYPE.GOLD;
+  else if (roll < CFG.bombChance + CFG.goldChance + CFG.heartChance) type = BALL_TYPE.HEART;
+  balls.push(new Ball(x, -r * 2, r, type));
+}
+
+function resolveCollisions() {
+  const cellSize = 50;
+  const cols = Math.ceil(canvas.width / cellSize);
+  const grid = new Map();
+  for (let i = 0; i < balls.length; i++) {
+    const key = Math.floor(balls[i].x / cellSize) + Math.floor(balls[i].y / cellSize) * cols;
+    if (!grid.has(key)) grid.set(key, []);
+    grid.get(key).push(i);
+  }
+  for (const [key, cell] of grid) {
+    const gx = key % cols, gy = Math.floor(key / cols);
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const neighbor = grid.get((gx + dx) + (gy + dy) * cols);
+        if (!neighbor) continue;
+        for (const i of cell) {
+          for (const j of neighbor) {
+            if (j <= i) continue;
+            const a = balls[i], b = balls[j];
+            const ddx = b.x - a.x, ddy = b.y - a.y;
+            const distSq = ddx * ddx + ddy * ddy;
+            const minDist = a.r + b.r;
+            if (distSq < minDist * minDist && distSq > 0.01) {
+              const dist = Math.sqrt(distSq);
+              const overlap = (minDist - dist) * 0.5;
+              const nx = ddx / dist, ny = ddy / dist;
+              a.x -= nx * overlap; a.y -= ny * overlap;
+              b.x += nx * overlap; b.y += ny * overlap;
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+// ── Rendering ──
+function render() {
+  // Screen shake
+  ctx.save();
+  if (shakeAmount > 0.5) {
+    ctx.translate((Math.random() - 0.5) * shakeAmount, (Math.random() - 0.5) * shakeAmount);
+    shakeAmount *= 0.85;
+  }
+
+  // Trail fade
+  ctx.fillStyle = `rgba(10, 10, 15, ${CFG.trailAlpha})`;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Webcam background
+  if (camReady) {
+    ctx.save();
+    ctx.globalAlpha = 0.18;
+    ctx.drawImage(procCanvas, 0, 0, canvas.width, canvas.height);
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  // Score rings
+  for (const ring of rings) ring.draw(ctx);
+
+  // Balls
+  for (const ball of balls) ball.draw(ctx);
+
+  // Particles
+  for (const p of particles) p.draw(ctx);
+
+  // Floating texts
+  for (const ft of floatingTexts) ft.draw(ctx);
+
+  // Floor danger zone
+  const floorY = canvas.height - CFG.floorHeight;
+  const floorAlpha = 0.3 + floorGlow * 0.5;
+  const grad = ctx.createLinearGradient(0, floorY - 30, 0, canvas.height);
+  grad.addColorStop(0, `rgba(255, 50, 50, 0)`);
+  grad.addColorStop(0.5, `rgba(255, 50, 50, ${floorAlpha * 0.15})`);
+  grad.addColorStop(1, `rgba(255, 50, 50, ${floorAlpha})`);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, floorY - 30, canvas.width, 30 + CFG.floorHeight);
+
+  ctx.restore();
+}
+
+function updateHUD() {
+  const heartsEl = document.getElementById('hearts');
+  let h = '';
+  for (let i = 0; i < CFG.maxLives; i++) {
+    h += i < lives
+      ? '<span style="filter: drop-shadow(0 0 4px #ff4466);">&#9829;</span>'
+      : '<span style="opacity:0.2;">&#9829;</span>';
+  }
+  heartsEl.innerHTML = h;
+  document.getElementById('wave-display').textContent = `Wave ${wave}`;
+  document.getElementById('balls-label').textContent = `${balls.length} balls`;
+
+  const comboEl = document.getElementById('combo-display');
+  if (combo > 1) {
+    comboEl.textContent = `x${combo.toFixed(1)}`;
+    comboEl.classList.add('visible');
+  } else {
+    comboEl.classList.remove('visible');
+  }
+}
+
+// ── Main Loop ──
+function loop(timestamp) {
+  requestAnimationFrame(loop);
+  const dt = Math.min(0.05, (timestamp - lastTime) / 1000);
+  lastTime = timestamp;
+
+  if (gameState !== STATE.PLAYING) {
+    // Still render camera background in menu/game-over
+    processMotion();
+    ctx.fillStyle = 'rgba(10,10,15,0.1)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    if (camReady) {
+      ctx.save(); ctx.globalAlpha = 0.12;
+      ctx.drawImage(procCanvas, 0, 0, canvas.width, canvas.height);
+      ctx.globalAlpha = 1; ctx.restore();
+    }
+    return;
+  }
+
+  // Process webcam
+  processMotion();
+
+  // Wave timer
+  waveTimer += dt;
+  if (waveTimer >= CFG.waveDuration) {
+    waveTimer = 0;
+    wave++;
+    floatingTexts.push(new FloatingText(canvas.width / 2, canvas.height / 3, `Wave ${wave}!`, 'hsla(200,80%,70%,1)'));
+  }
+
+  // Spawn balls
+  const spawnRate = CFG.baseSpawnRate + (wave - 1) * CFG.spawnRateGrowth;
+  spawnAccum += spawnRate * dt;
+  while (spawnAccum >= 1) { spawnAccum--; spawnBall(); }
+
+  // Update balls
+  for (const ball of balls) ball.update(dt);
+
+  // Ball-ball collisions
+  if (balls.length < 350) resolveCollisions();
+
+  // Ball-ring collisions
+  for (const ring of rings) {
+    for (const ball of balls) {
+      if (ball.alive && ring.contains(ball)) onBallHitRing(ball, ring);
+    }
+  }
+
+  // Remove dead balls
+  balls = balls.filter(b => b.alive);
+
+  // Update rings
+  for (const ring of rings) ring.update(dt);
+
+  // Update particles + floating text
+  for (const p of particles) p.update();
+  particles = particles.filter(p => p.life > 0);
+  for (const ft of floatingTexts) ft.update();
+  floatingTexts = floatingTexts.filter(ft => ft.life > 0);
+
+  // Combo based on active balls
+  combo = 1 + Math.floor(balls.length / 8) * 0.5;
+  combo = Math.min(5, Math.round(combo * 10) / 10);
+
+  // Passive score for keeping balls alive
+  score += balls.length * 0.1 * combo * dt;
+
+  // Animate display score
+  displayScore += (score - displayScore) * 0.1;
+  document.getElementById('score-display').textContent = Math.floor(displayScore);
+
+  // Floor glow decay
+  if (floorGlow > 0) floorGlow *= 0.93;
+
+  // HUD update (throttled)
+  if (Math.random() < 0.1) updateHUD();
+
+  // Render
+  render();
+}
+
+// ── Input ──
+function setupInput() {
+  // No click/touch spawning — motion only!
+}
+
+// ── Start / Restart ──
+document.getElementById('start-btn').addEventListener('click', async () => {
+  try {
+    setupCanvas();
+    await initCamera();
+    document.getElementById('start-screen').classList.add('hidden');
+    setupInput();
+    lastTime = performance.now();
+    requestAnimationFrame(loop);
+    startGame();
+  } catch (err) {
+    console.error(err);
+    const el = document.getElementById('cam-error');
+    el.style.display = 'block';
+    el.textContent = 'Camera error: ' + err.message +
+      (location.protocol === 'file:' ? ' — Try: python3 -m http.server 8000' : '');
+  }
+});
+
+document.getElementById('restart-btn').addEventListener('click', () => {
+  document.getElementById('game-over').classList.add('hidden');
+  startGame();
+});
+</script>
+</body>
+</html>
