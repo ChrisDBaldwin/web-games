@@ -1,0 +1,1012 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Knot Equivalence Test</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'Georgia', serif;
+  background: #0d1117;
+  color: #e6edf3;
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 24px;
+  background: #161b22;
+  border-bottom: 1px solid #30363d;
+}
+header h1 {
+  font-size: 1.3em;
+  letter-spacing: 0.5px;
+}
+header h1 span { color: #58a6ff; }
+.score {
+  font-size: 1.1em;
+  font-variant-numeric: tabular-nums;
+}
+.score .correct { color: #3fb950; }
+.score .wrong { color: #f85149; }
+.view-toggle {
+  display: flex;
+  gap: 4px;
+  background: #21262d;
+  border-radius: 6px;
+  padding: 3px;
+}
+.view-toggle button {
+  background: none;
+  border: none;
+  color: #8b949e;
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.9em;
+  transition: all 0.2s;
+}
+.view-toggle button.active {
+  background: #30363d;
+  color: #e6edf3;
+}
+.view-toggle button:hover:not(.active) { color: #c9d1d9; }
+.main {
+  flex: 1;
+  display: flex;
+  gap: 2px;
+  padding: 8px;
+  min-height: 0;
+}
+.panel {
+  flex: 1;
+  position: relative;
+  background: #161b22;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #30363d;
+}
+.panel canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.panel .label {
+  position: absolute;
+  top: 8px;
+  left: 12px;
+  font-size: 0.8em;
+  color: #8b949e;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.panel-2d {
+  background: #f5f0e8;
+}
+.bottom {
+  padding: 16px 24px 20px;
+  text-align: center;
+  background: #161b22;
+  border-top: 1px solid #30363d;
+}
+.question {
+  font-size: 1.2em;
+  margin-bottom: 14px;
+  font-style: italic;
+}
+.buttons {
+  display: flex;
+  justify-content: center;
+  gap: 20px;
+  margin-bottom: 10px;
+}
+.buttons button {
+  font-family: inherit;
+  font-size: 1.1em;
+  padding: 10px 40px;
+  border: 2px solid;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-weight: bold;
+  letter-spacing: 1px;
+}
+.btn-yes {
+  background: rgba(63, 185, 80, 0.1);
+  border-color: #3fb950;
+  color: #3fb950;
+}
+.btn-yes:hover { background: rgba(63, 185, 80, 0.25); }
+.btn-no {
+  background: rgba(248, 81, 73, 0.1);
+  border-color: #f85149;
+  color: #f85149;
+}
+.btn-no:hover { background: rgba(248, 81, 73, 0.25); }
+.buttons button:disabled { opacity: 0.4; cursor: default; }
+.feedback {
+  font-size: 0.95em;
+  min-height: 1.4em;
+  color: #8b949e;
+  transition: color 0.3s;
+}
+.feedback.correct-feedback { color: #3fb950; }
+.feedback.wrong-feedback { color: #f85149; }
+.streak {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  font-size: 0.8em;
+  color: #8b949e;
+}
+.drag-hint {
+  position: absolute;
+  bottom: 8px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 0.7em;
+  color: #484f58;
+  pointer-events: none;
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Knot <span>Equivalence</span> Test</h1>
+  <div class="view-toggle">
+    <button class="active" id="btn3d" onclick="setViewMode('3d')">3D</button>
+    <button id="btn2d" onclick="setViewMode('2d')">2D Diagram</button>
+  </div>
+  <div class="score">
+    <span class="correct" id="correctCount">0</span> /
+    <span id="totalCount">0</span>
+    &nbsp;
+    <span class="wrong" id="wrongCount">0</span> wrong
+  </div>
+</header>
+
+<div class="main">
+  <div class="panel" id="panelLeft">
+    <canvas id="canvas3dLeft"></canvas>
+    <canvas id="canvas2dLeft" style="display:none"></canvas>
+    <span class="label">Knot A</span>
+    <span class="drag-hint" id="dragHintLeft">drag to rotate</span>
+  </div>
+  <div class="panel" id="panelRight">
+    <canvas id="canvas3dRight"></canvas>
+    <canvas id="canvas2dRight" style="display:none"></canvas>
+    <span class="label">Knot B</span>
+    <span class="drag-hint" id="dragHintRight">drag to rotate</span>
+  </div>
+</div>
+
+<div class="bottom">
+  <div class="question">Are these the same type of knot?</div>
+  <div class="buttons">
+    <button class="btn-yes" id="btnYes" onclick="answer(true)">YES</button>
+    <button class="btn-no" id="btnNo" onclick="answer(false)">NO</button>
+  </div>
+  <div class="feedback" id="feedback"></div>
+</div>
+
+<script>
+// ─── Knot Parametrizations ───────────────────────────────────────
+const TAU = Math.PI * 2;
+
+const KNOT_DEFS = [
+  {
+    id: 'unknot',
+    name: 'Unknot (0₁)',
+    crossingNum: 0,
+    fn: t => {
+      const a = t * TAU;
+      return [2 * Math.cos(a), 2 * Math.sin(a), 0];
+    },
+    fact: 'The unknot is the simplest knot — a plain closed loop with no crossings.'
+  },
+  {
+    id: 'trefoil',
+    name: 'Trefoil (3₁)',
+    crossingNum: 3,
+    fn: t => {
+      const a = t * TAU;
+      return [
+        Math.sin(a) + 2 * Math.sin(2 * a),
+        Math.cos(a) - 2 * Math.cos(2 * a),
+        -Math.sin(3 * a)
+      ];
+    },
+    fact: 'The trefoil is the simplest non-trivial knot, with crossing number 3.'
+  },
+  {
+    id: 'figure_eight',
+    name: 'Figure-Eight (4₁)',
+    crossingNum: 4,
+    fn: t => {
+      const a = t * TAU;
+      const r = 2 + Math.cos(2 * a);
+      return [
+        r * Math.cos(3 * a),
+        r * Math.sin(3 * a),
+        Math.sin(4 * a)
+      ];
+    },
+    fact: 'The figure-eight knot is amphichiral — it looks the same as its mirror image.'
+  },
+  {
+    id: 'cinquefoil',
+    name: 'Cinquefoil (5₁)',
+    crossingNum: 5,
+    fn: t => {
+      const a = t * TAU;
+      const R = 3, r = 1;
+      return [
+        (R + r * Math.cos(5 * a)) * Math.cos(2 * a),
+        (R + r * Math.cos(5 * a)) * Math.sin(2 * a),
+        r * Math.sin(5 * a)
+      ];
+    },
+    fact: 'The cinquefoil is a (2,5) torus knot with crossing number 5.'
+  },
+  {
+    id: 'torus_3_4',
+    name: 'Torus Knot (3,4)',
+    crossingNum: 8,
+    fn: t => {
+      const a = t * TAU;
+      const R = 3, r = 1.2;
+      return [
+        (R + r * Math.cos(4 * a)) * Math.cos(3 * a),
+        (R + r * Math.cos(4 * a)) * Math.sin(3 * a),
+        r * Math.sin(4 * a)
+      ];
+    },
+    fact: 'The (3,4) torus knot wraps 3 times around the hole and 4 times through it.'
+  },
+  {
+    id: 'torus_2_7',
+    name: '7₁ Torus Knot',
+    crossingNum: 7,
+    fn: t => {
+      const a = t * TAU;
+      const R = 3, r = 1;
+      return [
+        (R + r * Math.cos(7 * a)) * Math.cos(2 * a),
+        (R + r * Math.cos(7 * a)) * Math.sin(2 * a),
+        r * Math.sin(7 * a)
+      ];
+    },
+    fact: 'The (2,7) torus knot has 7 crossings, all of the same sign.'
+  },
+  {
+    id: 'torus_3_5',
+    name: 'Torus Knot (3,5)',
+    crossingNum: 10,
+    fn: t => {
+      const a = t * TAU;
+      const R = 3, r = 1.2;
+      return [
+        (R + r * Math.cos(5 * a)) * Math.cos(3 * a),
+        (R + r * Math.cos(5 * a)) * Math.sin(3 * a),
+        r * Math.sin(5 * a)
+      ];
+    },
+    fact: 'The (3,5) torus knot has 10 crossings and lives on the surface of a torus.'
+  },
+  {
+    id: 'granny',
+    name: 'Granny Knot (3₁#3₁)',
+    crossingNum: 6,
+    fn: t => {
+      const a = t * TAU;
+      const x = Math.sin(a) + 2 * Math.sin(2 * a);
+      const y = Math.cos(a) - 2 * Math.cos(2 * a);
+      const z = -Math.sin(3 * a);
+      // Add a secondary trefoil perturbation to create a visually distinct composite
+      const x2 = 0.5 * Math.cos(5 * a);
+      const y2 = 0.5 * Math.sin(5 * a);
+      const z2 = 0.8 * Math.sin(7 * a);
+      return [x + x2, y + y2, z + z2];
+    },
+    fact: 'The granny knot is the connected sum of two identical trefoil knots.'
+  }
+];
+
+// ─── Rotation Helpers ────────────────────────────────────────────
+function rotatePoint(p, angles) {
+  let [x, y, z] = p;
+  const [a, b, c] = angles;
+
+  let y1 = y * Math.cos(a) - z * Math.sin(a);
+  let z1 = y * Math.sin(a) + z * Math.cos(a);
+  y = y1; z = z1;
+
+  let x1 = x * Math.cos(b) + z * Math.sin(b);
+  z1 = -x * Math.sin(b) + z * Math.cos(b);
+  x = x1; z = z1;
+
+  x1 = x * Math.cos(c) - y * Math.sin(c);
+  y1 = x * Math.sin(c) + y * Math.cos(c);
+  x = x1; y = y1;
+
+  return [x, y, z];
+}
+
+function randomAngles() {
+  return [Math.random() * TAU, Math.random() * TAU, Math.random() * TAU];
+}
+
+// ─── 3D Rendering (pure WebGL) ──────────────────────────────────
+// Minimal 3D tube renderer - no dependencies
+
+function createShader(gl, type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    console.error(gl.getShaderInfoLog(s));
+    gl.deleteShader(s);
+    return null;
+  }
+  return s;
+}
+
+function createProgram(gl, vs, fs) {
+  const p = gl.createProgram();
+  gl.attachShader(p, vs);
+  gl.attachShader(p, fs);
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+    console.error(gl.getProgramInfoLog(p));
+    return null;
+  }
+  return p;
+}
+
+const VERT_SRC = `
+attribute vec3 aPos;
+attribute vec3 aNorm;
+uniform mat4 uMVP;
+uniform mat3 uNorm;
+varying vec3 vNormal;
+varying vec3 vPos;
+void main() {
+  vNormal = normalize(uNorm * aNorm);
+  vPos = aPos;
+  gl_Position = uMVP * vec4(aPos, 1.0);
+}`;
+
+const FRAG_SRC = `
+precision mediump float;
+varying vec3 vNormal;
+varying vec3 vPos;
+uniform vec3 uColor;
+uniform vec3 uLightDir;
+void main() {
+  vec3 n = normalize(vNormal);
+  float diff = max(dot(n, uLightDir), 0.0);
+  float amb = 0.25;
+  vec3 viewDir = normalize(-vPos);
+  vec3 halfDir = normalize(uLightDir + viewDir);
+  float spec = pow(max(dot(n, halfDir), 0.0), 32.0);
+  vec3 col = uColor * (amb + 0.65 * diff) + vec3(1.0) * 0.3 * spec;
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+function mat4Perspective(fov, aspect, near, far) {
+  const f = 1.0 / Math.tan(fov / 2);
+  const nf = 1.0 / (near - far);
+  return new Float32Array([
+    f/aspect, 0, 0, 0,
+    0, f, 0, 0,
+    0, 0, (far+near)*nf, -1,
+    0, 0, 2*far*near*nf, 0
+  ]);
+}
+
+function mat4Multiply(a, b) {
+  const r = new Float32Array(16);
+  for (let i = 0; i < 4; i++)
+    for (let j = 0; j < 4; j++) {
+      r[j*4+i] = 0;
+      for (let k = 0; k < 4; k++)
+        r[j*4+i] += a[k*4+i] * b[j*4+k];
+    }
+  return r;
+}
+
+function mat4LookAt(eye, center, up) {
+  let zx = eye[0]-center[0], zy = eye[1]-center[1], zz = eye[2]-center[2];
+  let len = Math.sqrt(zx*zx+zy*zy+zz*zz);
+  zx/=len; zy/=len; zz/=len;
+  let xx = up[1]*zz-up[2]*zy, xy = up[2]*zx-up[0]*zz, xz = up[0]*zy-up[1]*zx;
+  len = Math.sqrt(xx*xx+xy*xy+xz*xz);
+  xx/=len; xy/=len; xz/=len;
+  let yx = zy*xz-zz*xy, yy = zz*xx-zx*xz, yz = zx*xy-zy*xx;
+  return new Float32Array([
+    xx, yx, zx, 0,
+    xy, yy, zy, 0,
+    xz, yz, zz, 0,
+    -(xx*eye[0]+xy*eye[1]+xz*eye[2]),
+    -(yx*eye[0]+yy*eye[1]+yz*eye[2]),
+    -(zx*eye[0]+zy*eye[1]+zz*eye[2]),
+    1
+  ]);
+}
+
+function mat4RotateY(m, angle) {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  const rot = new Float32Array([
+    c, 0, s, 0,
+    0, 1, 0, 0,
+    -s, 0, c, 0,
+    0, 0, 0, 1
+  ]);
+  return mat4Multiply(m, rot);
+}
+
+function mat4RotateX(m, angle) {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  const rot = new Float32Array([
+    1, 0, 0, 0,
+    0, c, -s, 0,
+    0, s, c, 0,
+    0, 0, 0, 1
+  ]);
+  return mat4Multiply(m, rot);
+}
+
+function mat3NormalFromMat4(m) {
+  // Extract upper-left 3x3 and compute inverse transpose
+  const a00=m[0],a01=m[1],a02=m[2];
+  const a10=m[4],a11=m[5],a12=m[6];
+  const a20=m[8],a21=m[9],a22=m[10];
+  const det = a00*(a11*a22-a12*a21)-a01*(a10*a22-a12*a20)+a02*(a10*a21-a11*a20);
+  const id = 1.0/det;
+  return new Float32Array([
+    (a11*a22-a12*a21)*id, (a02*a21-a01*a22)*id, (a01*a12-a02*a11)*id,
+    (a12*a20-a10*a22)*id, (a00*a22-a02*a20)*id, (a02*a10-a00*a12)*id,
+    (a10*a21-a11*a20)*id, (a01*a20-a00*a21)*id, (a00*a11-a01*a10)*id
+  ]);
+}
+
+function generateTubeGeometry(knotFn, angles, numSegments, numRadial, tubeRadius) {
+  numSegments = numSegments || 200;
+  numRadial = numRadial || 12;
+  tubeRadius = tubeRadius || 0.18;
+
+  const positions = [];
+  const normals = [];
+  const indices = [];
+
+  // Sample curve points and compute Frenet frames
+  const pts = [];
+  const tangents = [];
+  for (let i = 0; i <= numSegments; i++) {
+    const t = i / numSegments;
+    const p = knotFn(t);
+    pts.push(rotatePoint(p, angles));
+  }
+
+  for (let i = 0; i <= numSegments; i++) {
+    const prev = i === 0 ? numSegments - 1 : i - 1;
+    const next = i === numSegments ? 1 : i + 1;
+    const tx = pts[next][0] - pts[prev][0];
+    const ty = pts[next][1] - pts[prev][1];
+    const tz = pts[next][2] - pts[prev][2];
+    const len = Math.sqrt(tx*tx + ty*ty + tz*tz);
+    tangents.push([tx/len, ty/len, tz/len]);
+  }
+
+  // Build frames using parallel transport
+  const frames = [];
+  // Initial normal: pick a vector not parallel to first tangent
+  let T = tangents[0];
+  let N, B;
+  if (Math.abs(T[0]) < 0.9) {
+    N = [1 - T[0]*T[0], -T[0]*T[1], -T[0]*T[2]];
+  } else {
+    N = [-T[1]*T[0], 1 - T[1]*T[1], -T[1]*T[2]];
+  }
+  let nlen = Math.sqrt(N[0]*N[0]+N[1]*N[1]+N[2]*N[2]);
+  N = [N[0]/nlen, N[1]/nlen, N[2]/nlen];
+  B = [T[1]*N[2]-T[2]*N[1], T[2]*N[0]-T[0]*N[2], T[0]*N[1]-T[1]*N[0]];
+  frames.push({ N: [...N], B: [...B] });
+
+  for (let i = 1; i <= numSegments; i++) {
+    const T1 = tangents[i];
+    // Project previous N onto plane perpendicular to new T
+    let dot = N[0]*T1[0] + N[1]*T1[1] + N[2]*T1[2];
+    N = [N[0]-dot*T1[0], N[1]-dot*T1[1], N[2]-dot*T1[2]];
+    nlen = Math.sqrt(N[0]*N[0]+N[1]*N[1]+N[2]*N[2]);
+    if (nlen > 1e-6) {
+      N = [N[0]/nlen, N[1]/nlen, N[2]/nlen];
+    }
+    B = [T1[1]*N[2]-T1[2]*N[1], T1[2]*N[0]-T1[0]*N[2], T1[0]*N[1]-T1[1]*N[0]];
+    frames.push({ N: [...N], B: [...B] });
+  }
+
+  // Generate vertices
+  for (let i = 0; i <= numSegments; i++) {
+    const P = pts[i];
+    const frame = frames[i];
+    for (let j = 0; j < numRadial; j++) {
+      const angle = (j / numRadial) * TAU;
+      const cos = Math.cos(angle), sin = Math.sin(angle);
+      const nx = cos * frame.N[0] + sin * frame.B[0];
+      const ny = cos * frame.N[1] + sin * frame.B[1];
+      const nz = cos * frame.N[2] + sin * frame.B[2];
+      positions.push(
+        P[0] + tubeRadius * nx,
+        P[1] + tubeRadius * ny,
+        P[2] + tubeRadius * nz
+      );
+      normals.push(nx, ny, nz);
+    }
+  }
+
+  // Generate indices
+  for (let i = 0; i < numSegments; i++) {
+    for (let j = 0; j < numRadial; j++) {
+      const a = i * numRadial + j;
+      const b = i * numRadial + (j + 1) % numRadial;
+      const c = (i + 1) * numRadial + (j + 1) % numRadial;
+      const d = (i + 1) * numRadial + j;
+      indices.push(a, b, d, b, c, d);
+    }
+  }
+
+  return {
+    positions: new Float32Array(positions),
+    normals: new Float32Array(normals),
+    indices: new Uint16Array(indices.length <= 65536 ? indices : []),
+    indices32: indices.length > 65536 ? new Uint32Array(indices) : null
+  };
+}
+
+// ─── WebGL Scene Setup ───────────────────────────────────────────
+
+class KnotRenderer3D {
+  constructor(canvas) {
+    this.canvas = canvas;
+    const gl = canvas.getContext('webgl', { antialias: true, alpha: false });
+    if (!gl) { this.gl = null; return; }
+    this.gl = gl;
+
+    const vs = createShader(gl, gl.VERTEX_SHADER, VERT_SRC);
+    const fs = createShader(gl, gl.FRAGMENT_SHADER, FRAG_SRC);
+    this.program = createProgram(gl, vs, fs);
+    this.locs = {
+      aPos: gl.getAttribLocation(this.program, 'aPos'),
+      aNorm: gl.getAttribLocation(this.program, 'aNorm'),
+      uMVP: gl.getUniformLocation(this.program, 'uMVP'),
+      uNorm: gl.getUniformLocation(this.program, 'uNorm'),
+      uColor: gl.getUniformLocation(this.program, 'uColor'),
+      uLightDir: gl.getUniformLocation(this.program, 'uLightDir'),
+    };
+    gl.enable(gl.DEPTH_TEST);
+    gl.enable(gl.CULL_FACE);
+    gl.clearColor(0.055, 0.067, 0.09, 1);
+
+    this.posBuf = gl.createBuffer();
+    this.normBuf = gl.createBuffer();
+    this.idxBuf = gl.createBuffer();
+    this.indexCount = 0;
+
+    this.rotX = 0.3;
+    this.rotY = 0;
+    this.autoRotSpeed = 0.4 + Math.random() * 0.3;
+    this.color = [0.34, 0.65, 1.0];
+    this.use32 = false;
+
+    this._setupDrag();
+  }
+
+  _setupDrag() {
+    let dragging = false, lastX, lastY;
+    this.canvas.addEventListener('pointerdown', e => {
+      dragging = true;
+      lastX = e.clientX; lastY = e.clientY;
+      this.canvas.setPointerCapture(e.pointerId);
+    });
+    this.canvas.addEventListener('pointermove', e => {
+      if (!dragging) return;
+      const dx = e.clientX - lastX, dy = e.clientY - lastY;
+      this.rotY += dx * 0.01;
+      this.rotX += dy * 0.01;
+      lastX = e.clientX; lastY = e.clientY;
+    });
+    this.canvas.addEventListener('pointerup', () => dragging = false);
+    this.canvas.addEventListener('pointercancel', () => dragging = false);
+  }
+
+  setKnot(knotFn, angles) {
+    const gl = this.gl;
+    if (!gl) return;
+    const geo = generateTubeGeometry(knotFn, angles, 256, 14, 0.2);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.posBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, geo.positions, gl.STATIC_DRAW);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.normBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, geo.normals, gl.STATIC_DRAW);
+
+    if (geo.indices32) {
+      const ext = gl.getExtension('OES_element_index_uint');
+      if (ext) {
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.idxBuf);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, geo.indices32, gl.STATIC_DRAW);
+        this.indexCount = geo.indices32.length;
+        this.use32 = true;
+      }
+    } else {
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.idxBuf);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, geo.indices, gl.STATIC_DRAW);
+      this.indexCount = geo.indices.length;
+      this.use32 = false;
+    }
+
+    this.rotX = 0.3;
+    this.rotY = 0;
+  }
+
+  render(dt) {
+    const gl = this.gl;
+    if (!gl || !this.indexCount) return;
+
+    const rect = this.canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const w = rect.width * dpr | 0;
+    const h = rect.height * dpr | 0;
+    if (this.canvas.width !== w || this.canvas.height !== h) {
+      this.canvas.width = w;
+      this.canvas.height = h;
+    }
+    gl.viewport(0, 0, w, h);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    this.rotY += this.autoRotSpeed * dt;
+
+    const aspect = w / h;
+    const proj = mat4Perspective(0.8, aspect, 0.1, 100);
+    let view = mat4LookAt([0, 0, 12], [0, 0, 0], [0, 1, 0]);
+    view = mat4RotateX(view, this.rotX);
+    view = mat4RotateY(view, this.rotY);
+    const mvp = mat4Multiply(proj, view);
+    const normMat = mat3NormalFromMat4(view);
+
+    gl.useProgram(this.program);
+    gl.uniformMatrix4fv(this.locs.uMVP, false, mvp);
+    gl.uniformMatrix3fv(this.locs.uNorm, false, normMat);
+    gl.uniform3fv(this.locs.uColor, this.color);
+
+    const ld = [0.5, 0.8, 0.6];
+    const ll = Math.sqrt(ld[0]**2+ld[1]**2+ld[2]**2);
+    gl.uniform3f(this.locs.uLightDir, ld[0]/ll, ld[1]/ll, ld[2]/ll);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.posBuf);
+    gl.enableVertexAttribArray(this.locs.aPos);
+    gl.vertexAttribPointer(this.locs.aPos, 3, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.normBuf);
+    gl.enableVertexAttribArray(this.locs.aNorm);
+    gl.vertexAttribPointer(this.locs.aNorm, 3, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.idxBuf);
+    gl.drawElements(gl.TRIANGLES, this.indexCount,
+      this.use32 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT, 0);
+  }
+}
+
+// ─── 2D Knot Diagram Renderer ────────────────────────────────────
+
+function segmentIntersection(ax, ay, bx, by, cx, cy, dx, dy) {
+  const denom = (bx - ax) * (dy - cy) - (by - ay) * (dx - cx);
+  if (Math.abs(denom) < 1e-10) return null;
+  const t = ((cx - ax) * (dy - cy) - (cy - ay) * (dx - cx)) / denom;
+  const s = ((cx - ax) * (by - ay) - (cy - ay) * (bx - ax)) / denom;
+  if (t > 0.02 && t < 0.98 && s > 0.02 && s < 0.98) {
+    return { x: ax + t * (bx - ax), y: ay + t * (by - ay), t, s };
+  }
+  return null;
+}
+
+function render2DKnot(canvas, knotFn, angles) {
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const w = rect.width * dpr | 0;
+  const h = rect.height * dpr | 0;
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+
+  ctx.clearRect(0, 0, w, h);
+
+  // Parchment background
+  ctx.fillStyle = '#f5f0e8';
+  ctx.fillRect(0, 0, w, h);
+
+  const N = 500;
+  const pts = [];
+
+  // Sample and rotate, project to 2D (drop z, keep for crossing detection)
+  for (let i = 0; i < N; i++) {
+    const t = i / N;
+    const p = knotFn(t);
+    const r = rotatePoint(p, angles);
+    pts.push({ x: r[0], y: r[1], z: r[2] });
+  }
+
+  // Find bounding box for scaling
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of pts) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+
+  const rangeX = maxX - minX || 1;
+  const rangeY = maxY - minY || 1;
+  const margin = 40 * dpr;
+  const scaleX = (w - 2 * margin) / rangeX;
+  const scaleY = (h - 2 * margin) / rangeY;
+  const scale = Math.min(scaleX, scaleY);
+  const cx = w / 2, cy = h / 2;
+  const midX = (minX + maxX) / 2, midY = (minY + maxY) / 2;
+
+  function toScreen(p) {
+    return {
+      x: cx + (p.x - midX) * scale,
+      y: cy + (p.y - midY) * scale
+    };
+  }
+
+  // Find crossings
+  const gapSegments = new Set();
+  const GAP_RADIUS = 4; // how many segments to gap on each side
+
+  for (let i = 0; i < N; i++) {
+    const i2 = (i + 1) % N;
+    const p1 = toScreen(pts[i]), p2 = toScreen(pts[i2]);
+
+    for (let j = i + 3; j < N; j++) {
+      // Skip segments too close in parameter space (adjacent)
+      if ((j + 1) % N === i || j === i) continue;
+      const j2 = (j + 1) % N;
+      const p3 = toScreen(pts[j]), p4 = toScreen(pts[j2]);
+
+      const inter = segmentIntersection(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y, p4.x, p4.y);
+      if (inter) {
+        // Interpolate z to find over/under
+        const z_i = pts[i].z + inter.t * (pts[i2].z - pts[i].z);
+        const z_j = pts[j].z + inter.s * (pts[j2].z - pts[j].z);
+        const underIdx = z_i < z_j ? i : j;
+
+        for (let d = -GAP_RADIUS; d <= GAP_RADIUS; d++) {
+          gapSegments.add((underIdx + d + N) % N);
+        }
+      }
+    }
+  }
+
+  // Build continuous sub-paths (skip gaps)
+  const paths = [];
+  let currentPath = [];
+
+  for (let i = 0; i < N; i++) {
+    if (gapSegments.has(i)) {
+      if (currentPath.length > 1) paths.push(currentPath);
+      currentPath = [];
+    } else {
+      const sp = toScreen(pts[i]);
+      currentPath.push(sp);
+    }
+  }
+  // Handle wrap-around
+  if (currentPath.length > 1) {
+    if (!gapSegments.has(0) && paths.length > 0 && !gapSegments.has(N - 1)) {
+      // Merge last path with first
+      paths[0] = currentPath.concat(paths[0]);
+    } else {
+      paths.push(currentPath);
+    }
+  }
+
+  // Draw with textbook style
+  const lineWidth = 3.5 * dpr;
+
+  // Draw shadow/outline for depth
+  ctx.lineWidth = lineWidth + 2 * dpr;
+  ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  for (const path of paths) {
+    if (path.length < 2) continue;
+    ctx.beginPath();
+    ctx.moveTo(path[0].x + dpr, path[0].y + dpr);
+    for (let i = 1; i < path.length; i++) {
+      ctx.lineTo(path[i].x + dpr, path[i].y + dpr);
+    }
+    ctx.stroke();
+  }
+
+  // Main curve
+  ctx.lineWidth = lineWidth;
+  ctx.strokeStyle = '#2b2b2b';
+  for (const path of paths) {
+    if (path.length < 2) continue;
+    ctx.beginPath();
+    ctx.moveTo(path[0].x, path[0].y);
+    for (let i = 1; i < path.length; i++) {
+      ctx.lineTo(path[i].x, path[i].y);
+    }
+    ctx.stroke();
+  }
+
+  // Draw crossing number in corner
+  ctx.fillStyle = '#999';
+  ctx.font = `${12 * dpr}px Georgia`;
+  ctx.textAlign = 'right';
+}
+
+// ─── Game State ──────────────────────────────────────────────────
+
+let viewMode = '3d';
+let correct = 0, total = 0, wrong = 0, streak = 0;
+let currentAnswer = null; // true if same
+let leftKnotDef = null, rightKnotDef = null;
+let leftAngles = [0,0,0], rightAngles = [0,0,0];
+let waiting = false;
+
+const rendererLeft = new KnotRenderer3D(document.getElementById('canvas3dLeft'));
+const rendererRight = new KnotRenderer3D(document.getElementById('canvas3dRight'));
+
+rendererLeft.color = [0.85, 0.45, 0.25];  // warm orange
+rendererRight.color = [0.30, 0.55, 0.90]; // cool blue
+rendererRight.autoRotSpeed = -0.35 - Math.random() * 0.2;
+
+function newRound() {
+  waiting = false;
+  document.getElementById('btnYes').disabled = false;
+  document.getElementById('btnNo').disabled = false;
+  document.getElementById('feedback').textContent = '';
+  document.getElementById('feedback').className = 'feedback';
+
+  const same = Math.random() < 0.5;
+  const idx1 = Math.floor(Math.random() * KNOT_DEFS.length);
+  let idx2 = idx1;
+  if (!same) {
+    while (idx2 === idx1) idx2 = Math.floor(Math.random() * KNOT_DEFS.length);
+  }
+
+  leftKnotDef = KNOT_DEFS[idx1];
+  rightKnotDef = KNOT_DEFS[idx2];
+  currentAnswer = same;
+
+  leftAngles = randomAngles();
+  rightAngles = randomAngles();
+
+  rendererLeft.setKnot(leftKnotDef.fn, leftAngles);
+  rendererRight.setKnot(rightKnotDef.fn, rightAngles);
+
+  if (viewMode === '2d') {
+    render2DKnot(document.getElementById('canvas2dLeft'), leftKnotDef.fn, leftAngles);
+    render2DKnot(document.getElementById('canvas2dRight'), rightKnotDef.fn, rightAngles);
+  }
+}
+
+function answer(userSaidYes) {
+  if (waiting) return;
+  waiting = true;
+  document.getElementById('btnYes').disabled = true;
+  document.getElementById('btnNo').disabled = true;
+
+  const isCorrect = (userSaidYes === currentAnswer);
+  total++;
+
+  const fb = document.getElementById('feedback');
+  if (isCorrect) {
+    correct++;
+    streak++;
+    fb.className = 'feedback correct-feedback';
+    const streakText = streak >= 3 ? ` (${streak} streak!)` : '';
+    if (currentAnswer) {
+      fb.textContent = `Correct! Both are ${leftKnotDef.name}.${streakText} ${leftKnotDef.fact}`;
+    } else {
+      fb.textContent = `Correct! ${leftKnotDef.name} ≠ ${rightKnotDef.name}.${streakText}`;
+    }
+  } else {
+    wrong++;
+    streak = 0;
+    fb.className = 'feedback wrong-feedback';
+    if (currentAnswer) {
+      fb.textContent = `Wrong — both are ${leftKnotDef.name}! ${leftKnotDef.fact}`;
+    } else {
+      fb.textContent = `Wrong — ${leftKnotDef.name} ≠ ${rightKnotDef.name}.`;
+    }
+  }
+
+  document.getElementById('correctCount').textContent = correct;
+  document.getElementById('totalCount').textContent = total;
+  document.getElementById('wrongCount').textContent = wrong;
+
+  setTimeout(newRound, 2800);
+}
+
+function setViewMode(mode) {
+  viewMode = mode;
+  document.getElementById('btn3d').classList.toggle('active', mode === '3d');
+  document.getElementById('btn2d').classList.toggle('active', mode === '2d');
+
+  const c3L = document.getElementById('canvas3dLeft');
+  const c3R = document.getElementById('canvas3dRight');
+  const c2L = document.getElementById('canvas2dLeft');
+  const c2R = document.getElementById('canvas2dRight');
+  const hintL = document.getElementById('dragHintLeft');
+  const hintR = document.getElementById('dragHintRight');
+
+  if (mode === '3d') {
+    c3L.style.display = 'block'; c3R.style.display = 'block';
+    c2L.style.display = 'none'; c2R.style.display = 'none';
+    document.getElementById('panelLeft').classList.remove('panel-2d');
+    document.getElementById('panelRight').classList.remove('panel-2d');
+    hintL.style.display = ''; hintR.style.display = '';
+  } else {
+    c3L.style.display = 'none'; c3R.style.display = 'none';
+    c2L.style.display = 'block'; c2R.style.display = 'block';
+    document.getElementById('panelLeft').classList.add('panel-2d');
+    document.getElementById('panelRight').classList.add('panel-2d');
+    hintL.style.display = 'none'; hintR.style.display = 'none';
+    render2DKnot(c2L, leftKnotDef.fn, leftAngles);
+    render2DKnot(c2R, rightKnotDef.fn, rightAngles);
+  }
+}
+
+// ─── Animation Loop ──────────────────────────────────────────────
+
+let lastTime = 0;
+function animate(now) {
+  requestAnimationFrame(animate);
+  const dt = Math.min((now - lastTime) / 1000, 0.05);
+  lastTime = now;
+
+  if (viewMode === '3d') {
+    rendererLeft.render(dt);
+    rendererRight.render(dt);
+  }
+}
+
+// ─── Keyboard Shortcuts ──────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (waiting) return;
+  if (e.key === 'y' || e.key === 'Y') answer(true);
+  if (e.key === 'n' || e.key === 'N') answer(false);
+  if (e.key === '2') setViewMode('2d');
+  if (e.key === '3') setViewMode('3d');
+});
+
+// ─── Resize Handler ──────────────────────────────────────────────
+window.addEventListener('resize', () => {
+  if (viewMode === '2d') {
+    render2DKnot(document.getElementById('canvas2dLeft'), leftKnotDef.fn, leftAngles);
+    render2DKnot(document.getElementById('canvas2dRight'), rightKnotDef.fn, rightAngles);
+  }
+});
+
+// ─── Start ───────────────────────────────────────────────────────
+newRound();
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>
