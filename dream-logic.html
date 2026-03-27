@@ -1,0 +1,1603 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dream Logic</title>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#06060f;overflow:hidden;display:flex;justify-content:center;align-items:center;height:100vh;font-family:'Outfit',sans-serif}
+canvas{display:block}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+// ─── CONFIG ──────────────────────────────────────────────
+const CFG = {
+  TILE: 40,
+  MOVE_TIME: 0.1,
+  PARTICLE_MAX: 300,
+  BG: '#06060f',
+  FLOOR_BASE: [30, 28, 58],
+  WALL_BASE: [18, 16, 42],
+};
+
+function nightParams(n) {
+  const size = Math.min(101, 61 + n * 6);
+  const gridW = size | 1;
+  return {
+    GRID_W: gridW,
+    GRID_H: gridW,
+    ROOM_MIN: Math.min(30, 15 + n * 2),
+    ROOM_MAX: Math.min(40, 20 + n * 2),
+    MEMORY_DENSITY: Math.min(0.2, 0.12 + n * 0.01),
+    PUZZLE_ROOMS: Math.min(8, 3 + n),
+    EXPAND_TIME: Math.max(30, 50 - n * 2.5),
+    WAVE_SPEED: 1.5 + n * 0.15,
+    COLLAPSE_SPEED: Math.min(5, 3.5 + n * 0.2),
+    EXTRACT_TIMER_MULT: 2.5,
+  };
+}
+
+// ─── CANVAS ──────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W, H;
+function resize() { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; }
+window.addEventListener('resize', resize);
+resize();
+
+// ─── AUDIO ───────────────────────────────────────────────
+let audioCtx;
+function initAudio() { if (audioCtx) return; audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+
+function playTone(freq, dur, type = 'sine', vol = 0.15, dest) {
+  if (!audioCtx) return;
+  const out = dest || sfxDest(); if (!out) return;
+  const osc = audioCtx.createOscillator(), g = audioCtx.createGain();
+  osc.type = type; osc.frequency.value = freq;
+  g.gain.setValueAtTime(vol, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+  osc.connect(g); g.connect(out);
+  osc.start(); osc.stop(audioCtx.currentTime + dur);
+}
+function playToneFiltered(freq, dur, type, vol, cutoff, dest) {
+  if (!audioCtx) return;
+  const out = dest || sfxDest(); if (!out) return;
+  const osc = audioCtx.createOscillator(), g = audioCtx.createGain();
+  const f = audioCtx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = cutoff; f.Q.value = 2;
+  osc.type = type; osc.frequency.value = freq;
+  g.gain.setValueAtTime(vol, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+  osc.connect(f); f.connect(g); g.connect(out);
+  osc.start(); osc.stop(audioCtx.currentTime + dur);
+}
+function playNoise(dur, vol = 0.05, cutoff = 800) {
+  if (!audioCtx) return;
+  const out = sfxDest(); if (!out) return;
+  const buf = audioCtx.createBuffer(1, audioCtx.sampleRate * dur, audioCtx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  const src = audioCtx.createBufferSource(); src.buffer = buf;
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(vol, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+  const f = audioCtx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = cutoff;
+  src.connect(f); f.connect(g); g.connect(out); src.start();
+}
+
+// ─── SFX ─────────────────────────────────────────────────
+function sndMove() { playToneFiltered(180 + Math.random() * 40, 0.06, 'triangle', 0.04, 600); }
+function sndPush() { playNoise(0.15, 0.07, 400); playToneFiltered(80, 0.2, 'triangle', 0.06, 300); }
+
+// memory collect: pentatonic scale that cycles — creates a melody as you collect
+const PENTA = [523, 587, 659, 784, 880, 1047, 1175, 1319];
+function sndMemory() {
+  const note = PENTA[memCollected % PENTA.length];
+  playTone(note, 0.18, 'sine', 0.09);
+  playTone(note * 1.5, 0.12, 'sine', 0.03); // soft fifth overtone
+}
+
+function sndPuzzle() {
+  [440, 554, 659, 880].forEach((f, i) => setTimeout(() => {
+    playTone(f, 0.3, 'sine', 0.12); playTone(f * 2, 0.2, 'sine', 0.04);
+  }, i * 160));
+}
+function sndAlarm() {
+  playTone(880, 0.12, 'square', 0.06);
+  setTimeout(() => playTone(660, 0.12, 'square', 0.06), 150);
+}
+function sndCollapse() { playNoise(0.4, 0.05, 200); playToneFiltered(40, 0.4, 'sawtooth', 0.04, 120); }
+function sndVictory() {
+  [262,330,392,523,659].forEach((f,i) => setTimeout(() => {
+    playTone(f, 0.6, 'sine', 0.1); playTone(f*2, 0.4, 'sine', 0.04);
+  }, i*140));
+}
+function sndDefeat() {
+  [392,349,330,262].forEach((f,i) => setTimeout(() => playToneFiltered(f, 0.5, 'sine', 0.08, 600), i*220));
+}
+
+// ─── AMBIENT SOUNDSCAPE ──────────────────────────────────
+let amb = null; // ambient system nodes
+
+function startAmbient() {
+  if (!audioCtx || amb) return;
+
+  // master chain: oscillators → filter → gain → reverb-ish delay → destination
+  const master = audioCtx.createGain();
+  master.gain.value = 0;
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'lowpass'; filter.frequency.value = 180; filter.Q.value = 0.7;
+
+  // subtle delay for space
+  const delay = audioCtx.createDelay(1.0);
+  delay.delayTime.value = 0.4;
+  const delayGain = audioCtx.createGain();
+  delayGain.gain.value = 0.15;
+  const delayFilter = audioCtx.createBiquadFilter();
+  delayFilter.type = 'lowpass'; delayFilter.frequency.value = 400;
+
+  // LFO for filter breathing
+  const lfo = audioCtx.createOscillator();
+  const lfoGain = audioCtx.createGain();
+  lfo.type = 'sine'; lfo.frequency.value = 0.12;
+  lfoGain.gain.value = 40;
+  lfo.connect(lfoGain); lfoGain.connect(filter.frequency);
+  lfo.start();
+
+  // second LFO for slow volume swell
+  const lfo2 = audioCtx.createOscillator();
+  const lfo2Gain = audioCtx.createGain();
+  lfo2.type = 'sine'; lfo2.frequency.value = 0.07;
+  lfo2Gain.gain.value = 0.015;
+  lfo2.connect(lfo2Gain); lfo2Gain.connect(master.gain);
+  lfo2.start();
+
+  // drone oscillators — root, fifth, octave, minor third (dreamy Cm)
+  const freqs = [65.41, 98, 130.81, 155.56]; // C2, G2, C3, Eb3
+  const types = ['sine', 'sine', 'triangle', 'sine'];
+  const vols = [0.06, 0.03, 0.015, 0.02];
+  const oscs = freqs.map((f, i) => {
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = types[i]; o.frequency.value = f;
+    // slight detune for warmth
+    o.detune.value = (Math.random() - 0.5) * 8;
+    g.gain.value = vols[i];
+    o.connect(g); g.connect(filter);
+    o.start();
+    return { osc: o, gain: g, baseFreq: f, baseVol: vols[i] };
+  });
+
+  // routing
+  filter.connect(master);
+  master.connect(musDest() || audioCtx.destination);
+  // delay path
+  master.connect(delay); delay.connect(delayFilter);
+  delayFilter.connect(delayGain); delayGain.connect(musDest() || audioCtx.destination);
+  delayGain.connect(delay); // feedback loop
+
+  amb = { master, filter, oscs, lfo, lfoGain, lfo2, delay, delayGain };
+}
+
+function updateAmbient() {
+  if (!amb || !audioCtx) return;
+  const t = audioCtx.currentTime;
+  const { master, filter, oscs, lfo, lfoGain } = amb;
+
+  if (state === 'dreaming') {
+    // warm, calm, slowly evolving
+    master.gain.linearRampToValueAtTime(0.9, t + 2);
+    filter.frequency.linearRampToValueAtTime(220, t + 3);
+    lfo.frequency.linearRampToValueAtTime(0.12, t + 2);
+    lfoGain.gain.linearRampToValueAtTime(50, t + 2);
+    // dreaming chord: Cm (C2, G2, C3, Eb3)
+    oscs[0].osc.frequency.linearRampToValueAtTime(65.41, t + 3);
+    oscs[1].osc.frequency.linearRampToValueAtTime(98, t + 3);
+    oscs[2].osc.frequency.linearRampToValueAtTime(130.81, t + 3);
+    oscs[3].osc.frequency.linearRampToValueAtTime(155.56, t + 3);
+  } else if (state === 'waking') {
+    // tense, dissonant, pulsing
+    master.gain.linearRampToValueAtTime(1.1, t + 0.5);
+    filter.frequency.linearRampToValueAtTime(450, t + 1);
+    lfo.frequency.linearRampToValueAtTime(0.6, t + 1);
+    lfoGain.gain.linearRampToValueAtTime(100, t + 1);
+    // shift to diminished/tense: C2, F#2, Bb2, E3
+    oscs[0].osc.frequency.linearRampToValueAtTime(65.41, t + 2);
+    oscs[1].osc.frequency.linearRampToValueAtTime(92.5, t + 2);  // F#2
+    oscs[2].osc.frequency.linearRampToValueAtTime(116.54, t + 2); // Bb2
+    oscs[3].osc.frequency.linearRampToValueAtTime(164.81, t + 2); // E3
+  } else if (state === 'sleeping') {
+    // very quiet, building
+    master.gain.linearRampToValueAtTime(0.3, t + 1);
+    filter.frequency.linearRampToValueAtTime(120, t + 1);
+  } else {
+    // title / results — fade out
+    master.gain.linearRampToValueAtTime(0, t + 2);
+  }
+}
+
+let lastAmbientState = '';
+function tickAmbient() {
+  if (state !== lastAmbientState) { lastAmbientState = state; updateAmbient(); }
+}
+
+// ─── GENERATIVE MUSIC ────────────────────────────────────
+// Arpeggiated chord progressions with floating melody — all procedural
+function midiToFreq(m) { return 440 * Math.pow(2, (m - 69) / 12); }
+
+// shared music reverb (delay line routed back into itself)
+let musicDelay = null;
+function getMusicDest() {
+  if (!audioCtx) return null;
+  if (!musicDelay) {
+    const d = audioCtx.createDelay(1.5); d.delayTime.value = 0.55;
+    const fb = audioCtx.createGain(); fb.gain.value = 0.25;
+    const filt = audioCtx.createBiquadFilter(); filt.type = 'lowpass'; filt.frequency.value = 1400;
+    const wet = audioCtx.createGain(); wet.gain.value = 0.35;
+    d.connect(filt); filt.connect(fb); fb.connect(d); // feedback loop
+    d.connect(wet); wet.connect(musDest() || audioCtx.destination);
+    musicDelay = { input: d };
+  }
+  return musicDelay.input;
+}
+
+function playMusicNote(midi, dur, vol, bright = 1200) {
+  if (!audioCtx) return;
+  const freq = midiToFreq(midi), t = audioCtx.currentTime;
+  // main voice: sine
+  const o1 = audioCtx.createOscillator(); o1.type = 'sine'; o1.frequency.value = freq;
+  // shimmer voice: triangle an octave up, very quiet
+  const o2 = audioCtx.createOscillator(); o2.type = 'triangle'; o2.frequency.value = freq * 2.003;
+  const g = audioCtx.createGain();
+  const f = audioCtx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = bright; f.Q.value = 0.8;
+  // soft attack, long tail
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(vol, t + 0.06);
+  g.gain.setValueAtTime(vol * 0.9, t + dur * 0.2);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  // filter closes over time
+  f.frequency.exponentialRampToValueAtTime(Math.max(80, bright * 0.15), t + dur);
+  o1.connect(f); o2.connect(f); f.connect(g);
+  // dry + wet
+  g.connect(musDest() || audioCtx.destination);
+  const rd = getMusicDest(); if (rd) g.connect(rd);
+  o1.start(t); o2.start(t); o1.stop(t + dur + 0.1); o2.stop(t + dur + 0.1);
+}
+
+// chord progressions
+const DREAM_PROG = [
+  [48, 51, 55, 60],  // Cm  (C3 Eb3 G3 C4)
+  [44, 48, 51, 56],  // Ab  (Ab2 C3 Eb3 Ab3)
+  [43, 46, 51, 55],  // Ebm (Eb2 G2 Bb2 Eb3)
+  [46, 50, 53, 58],  // Bb  (Bb2 D3 F3 Bb3)
+];
+const WAKE_PROG = [
+  [48, 51, 54, 60],  // Cdim
+  [47, 51, 54, 59],  // Bdim
+  [48, 52, 56, 60],  // Caug
+  [46, 49, 54, 58],  // Bb(b5)
+];
+const DREAM_MELODY_SCALE = [60, 63, 65, 67, 70, 72, 75, 77]; // Cm pentatonic C4-G5
+const WAKE_MELODY_SCALE = [60, 61, 63, 66, 67, 69, 72];      // chromatic-ish tension
+
+let mus = {
+  step: -1,
+  chordIdx: 0,
+  nextTime: 0,
+  melodyIdx: 0,
+  melodyDir: 1,
+  active: false,
+  bassTimer: 0,
+};
+
+function tickMusic() {
+  if (!audioCtx) return;
+  if (state === 'title' || state === 'escaped' || state === 'lost') { mus.active = false; return; }
+  if (state === 'sleeping') {
+    // sparse single notes during sleep transition
+    if (!mus.active) { mus.active = true; mus.nextTime = gameTime + 0.8; }
+    if (gameTime >= mus.nextTime) {
+      mus.nextTime = gameTime + 1.2 + Math.random() * 0.8;
+      const note = DREAM_MELODY_SCALE[Math.floor(Math.random() * 4)]; // low end only
+      playMusicNote(note, 3, 0.02, 600);
+    }
+    return;
+  }
+
+  const isWake = state === 'waking';
+  const prog = isWake ? WAKE_PROG : DREAM_PROG;
+  const scale = isWake ? WAKE_MELODY_SCALE : DREAM_MELODY_SCALE;
+  const interval = isWake ? (0.25 + Math.random() * 0.1) : (0.45 + Math.random() * 0.15);
+  const chord = prog[mus.chordIdx % prog.length];
+
+  if (!mus.active) { mus.active = true; mus.step = -1; mus.nextTime = gameTime + 0.5; mus.chordIdx = 0; }
+  if (gameTime < mus.nextTime) return;
+
+  mus.step++;
+  mus.nextTime = gameTime + interval;
+
+  // advance chord every 8 steps
+  if (mus.step > 0 && mus.step % 8 === 0) mus.chordIdx = (mus.chordIdx + 1) % prog.length;
+
+  // ── arpeggio ──
+  // Pattern: varies by position in the bar (not just cycling through chord tones)
+  const patterns = [0, 2, 1, 3, 2, 0, 3, 1]; // index into chord
+  const ni = patterns[mus.step % patterns.length];
+  const arpNote = chord[ni % chord.length];
+  const arpOct = (mus.step % 16 < 4) ? 0 : (Math.random() < 0.25 ? 12 : 0); // occasional octave up
+  const arpVol = isWake ? 0.035 : 0.028;
+  const arpDur = isWake ? 0.9 : 2.0;
+  playMusicNote(arpNote + arpOct, arpDur, arpVol, isWake ? 1800 : 1000);
+
+  // ── melody (plays on ~30% of steps) ──
+  if (Math.random() < (isWake ? 0.35 : 0.25)) {
+    // tend to move stepwise with occasional leaps
+    if (Math.random() < 0.7) {
+      mus.melodyIdx += mus.melodyDir;
+    } else {
+      mus.melodyIdx += (Math.floor(Math.random() * 3) - 1) * 2; // leap
+    }
+    // bounce off edges
+    if (mus.melodyIdx >= scale.length - 1) { mus.melodyIdx = scale.length - 2; mus.melodyDir = -1; }
+    if (mus.melodyIdx <= 0) { mus.melodyIdx = 1; mus.melodyDir = 1; }
+    mus.melodyIdx = Math.max(0, Math.min(scale.length - 1, mus.melodyIdx));
+
+    const melNote = scale[mus.melodyIdx];
+    const melVol = isWake ? 0.025 : 0.018;
+    const melDur = isWake ? 1.2 : 2.5;
+    // slight delay from arp for human feel
+    setTimeout(() => playMusicNote(melNote, melDur, melVol, isWake ? 2000 : 800), 80 + Math.random() * 60);
+  }
+
+  // ── bass (every ~4 steps) ──
+  if (mus.step % 4 === 0) {
+    const bassNote = chord[0] - 12; // root an octave down
+    const bassVol = isWake ? 0.03 : 0.022;
+    playMusicNote(bassNote, isWake ? 1.5 : 3.0, bassVol, isWake ? 400 : 250);
+  }
+}
+
+// ─── TILE TYPES ──────────────────────────────────────────
+const T = { VOID: 0, WALL: 1, FLOOR: 2, TARGET: 3, EXTRACT: 4 };
+
+// ─── PARTICLES ───────────────────────────────────────────
+let particles = [];
+function spawnP(x, y, count, color, speed = 1, life = 1) {
+  for (let i = 0; i < count; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const s = (0.3 + Math.random() * 0.7) * speed;
+    particles.push({ x, y, vx: Math.cos(a) * s * 30, vy: Math.sin(a) * s * 30,
+      life: (0.5 + Math.random() * 0.5) * life, maxLife: life, color, size: 2 + Math.random() * 3 });
+  }
+  if (particles.length > CFG.PARTICLE_MAX) particles.splice(0, particles.length - CFG.PARTICLE_MAX);
+}
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i]; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.95; p.vy *= 0.95;
+    p.life -= dt; if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+
+// ─── DREAM DUST ──────────────────────────────────────────
+let dust = [];
+function initDust() {
+  dust = [];
+  for (let i = 0; i < 80; i++) {
+    dust.push({ x: Math.random() * np.GRID_W * CFG.TILE, y: Math.random() * np.GRID_H * CFG.TILE,
+      size: 1 + Math.random() * 2, speed: 3 + Math.random() * 8, phase: Math.random() * Math.PI * 2, alpha: 0.2 + Math.random() * 0.4 });
+  }
+}
+function updateDust(dt, t) {
+  for (const d of dust) {
+    d.y -= d.speed * dt; d.x += Math.sin(t * 0.5 + d.phase) * 5 * dt;
+    if (d.y < -10) { d.y = np.GRID_H * CFG.TILE + 10; d.x = Math.random() * np.GRID_W * CFG.TILE; }
+  }
+}
+
+// ─── LEVEL GENERATION ────────────────────────────────────
+let grid = [], rooms = [], blocks = [], targets = [], memories = [];
+let extractZone = null, puzzlesSolved = 0;
+const MEMORY_COLORS = ['#ff88aa','#aa88ff','#88ddff','#ffdd66','#88ffaa','#ff8844','#dd88ff','#66ffdd','#ffaa88','#88aaff'];
+
+function generateLevel() {
+  const GW = np.GRID_W, GH = np.GRID_H;
+  grid = []; rooms = []; blocks = []; targets = []; memories = []; puzzlesSolved = 0;
+
+  for (let y = 0; y < GH; y++) { grid[y] = []; for (let x = 0; x < GW; x++) grid[y][x] = T.WALL; }
+
+  const cx = Math.floor(GW / 2), cy = Math.floor(GH / 2);
+  rooms.push(addRoom(cx - 3, cy - 3, 7, 7)); // bigger center room
+
+  // place many rooms
+  const maxRooms = np.ROOM_MIN + Math.floor(Math.random() * (np.ROOM_MAX - np.ROOM_MIN + 1));
+  for (let i = 0; i < 600 && rooms.length < maxRooms; i++) {
+    const w = 3 + Math.floor(Math.random() * 4) * 2; // 3,5,7,9
+    const h = 3 + Math.floor(Math.random() * 4) * 2;
+    const rx = 1 + Math.floor(Math.random() * (GW - w - 2));
+    const ry = 1 + Math.floor(Math.random() * (GH - h - 2));
+    if (canPlace(rx, ry, w, h)) rooms.push(addRoom(rx, ry, w, h));
+  }
+
+  // connect via MST
+  const connected = new Set([0]);
+  while (connected.size < rooms.length) {
+    let best = null, bestDist = Infinity;
+    for (const ci of connected) {
+      for (let j = 0; j < rooms.length; j++) {
+        if (connected.has(j)) continue;
+        const d = Math.abs(rooms[ci].cx - rooms[j].cx) + Math.abs(rooms[ci].cy - rooms[j].cy);
+        if (d < bestDist) { bestDist = d; best = { from: ci, to: j }; }
+      }
+    }
+    if (!best) break;
+    connected.add(best.to);
+    carveCorridor(rooms[best.from], rooms[best.to]);
+  }
+
+  // extra corridors for loops
+  const extraCorridors = 2 + Math.floor(rooms.length / 8);
+  for (let i = 0; i < extraCorridors; i++) {
+    const a = Math.floor(Math.random() * rooms.length);
+    const b = Math.floor(Math.random() * rooms.length);
+    if (a !== b) carveCorridor(rooms[a], rooms[b]);
+  }
+
+  // extraction zone — random room within distance 5-10 of center (not center room)
+  const centerRoom = rooms[0];
+  const nearRooms = rooms.filter(r => {
+    if (r === centerRoom) return false;
+    const d = Math.sqrt((r.cx - cx) ** 2 + (r.cy - cy) ** 2);
+    return d >= 4 && d <= 12;
+  });
+  if (nearRooms.length > 0) {
+    const er = nearRooms[Math.floor(Math.random() * nearRooms.length)];
+    extractZone = { x: er.cx, y: er.cy };
+  } else {
+    // fallback: offset from center
+    extractZone = { x: cx + 3, y: cy };
+    if (grid[cy][cx + 3] !== T.FLOOR) extractZone = { x: cx, y: cy + 3 };
+  }
+  grid[extractZone.y][extractZone.x] = T.EXTRACT;
+
+  // scatter memories densely on floor tiles (like coins)
+  const floorTiles = [];
+  for (let y = 0; y < GH; y++) {
+    for (let x = 0; x < GW; x++) {
+      if (grid[y][x] !== T.FLOOR) continue;
+      // skip tiles very close to extraction or center
+      const dExt = Math.abs(x - extractZone.x) + Math.abs(y - extractZone.y);
+      const dCen = Math.abs(x - cx) + Math.abs(y - cy);
+      if (dExt < 2 || dCen < 2) continue;
+      floorTiles.push({ x, y });
+    }
+  }
+  // shuffle and pick a density-based count
+  floorTiles.sort(() => Math.random() - 0.5);
+  const memCount = Math.floor(floorTiles.length * np.MEMORY_DENSITY);
+  for (let i = 0; i < memCount; i++) {
+    const ft = floorTiles[i];
+    memories.push({ x: ft.x, y: ft.y, color: MEMORY_COLORS[i % MEMORY_COLORS.length], collected: false });
+  }
+
+  // block puzzles — 1:1 guaranteed solvable
+  const puzzleRooms = rooms.filter(r => r !== centerRoom && r.w >= 5 && r.h >= 5).sort(() => Math.random() - 0.5);
+  for (let i = 0; i < np.PUZZLE_ROOMS && i < puzzleRooms.length; i++) {
+    const r = puzzleRooms[i];
+    let placed = false;
+    for (let attempt = 0; attempt < 15 && !placed; attempt++) {
+      const tx = r.x + 1 + Math.floor(Math.random() * (r.w - 2));
+      const ty = r.y + 1 + Math.floor(Math.random() * Math.max(1, r.h - 4));
+      const bx = tx, by = ty + 2;
+      if (by >= r.y + 1 && by < r.y + r.h - 1 &&
+          grid[ty][tx] === T.FLOOR && grid[by][bx] === T.FLOOR &&
+          !hasEntity(tx, ty) && !hasEntity(bx, by)) {
+        grid[ty][tx] = T.TARGET;
+        targets.push({ x: tx, y: ty, filled: false });
+        blocks.push({ x: bx, y: by });
+        placed = true;
+      }
+    }
+  }
+
+  initDust();
+}
+
+function addRoom(rx, ry, rw, rh) {
+  for (let y = ry; y < ry + rh; y++) for (let x = rx; x < rx + rw; x++) grid[y][x] = T.FLOOR;
+  return { x: rx, y: ry, w: rw, h: rh, cx: Math.floor(rx + rw / 2), cy: Math.floor(ry + rh / 2) };
+}
+function canPlace(rx, ry, rw, rh) {
+  for (const r of rooms) { if (rx-1 < r.x+r.w && rx+rw+1 > r.x && ry-1 < r.y+r.h && ry+rh+1 > r.y) return false; }
+  return rx >= 1 && ry >= 1 && rx+rw < np.GRID_W-1 && ry+rh < np.GRID_H-1;
+}
+function carveCorridor(a, b) {
+  let x = a.cx, y = a.cy;
+  while (x !== b.cx) { if (grid[y][x] === T.WALL) grid[y][x] = T.FLOOR; x += x < b.cx ? 1 : -1; }
+  while (y !== b.cy) { if (grid[y][x] === T.WALL) grid[y][x] = T.FLOOR; y += y < b.cy ? 1 : -1; }
+  if (grid[y][x] === T.WALL) grid[y][x] = T.FLOOR;
+}
+function hasEntity(x, y) {
+  return blocks.some(b => b.x === x && b.y === y) || memories.some(m => m.x === x && m.y === y);
+}
+
+// ─── GAME STATE ──────────────────────────────────────────
+let state = 'title';
+let player = { x: 0, y: 0, px: 0, py: 0, moving: false, moveT: 0, dx: 0, dy: 0 };
+let visited = [];           // 2D bool — tiles player has stepped on
+let waveRadius = 5;        // current dream boundary from grid center
+let dreamTimer = 0;
+let sleepTimer = 0, resultTimer = 0, screenShake = 0, alarmTimer = 0;
+let alarmPlayed = false, memCollected = 0;
+let flashText = '', flashTimer = 0;
+let lastMoveDir = { x: 0, y: 1 };
+let gameTime = 0;
+let night = 0, totalMemories = 0, totalPuzzles = 0, totalStars = 0;
+let np = nightParams(0);
+let initials = '';  // for leaderboard entry
+
+function nightStars() { return puzzlesSolved + Math.floor(memCollected / 50); }
+function runStars() { return totalStars + nightStars(); }
+
+// ─── LEADERBOARD ─────────────────────────────────────────
+// Set this to your API endpoint when deployed (e.g. 'https://games.voidtalker.com/api')
+// Leave empty to use localStorage only
+const LEADERBOARD_API = 'http://localhost:3777';
+
+let onlineScores = null; // cached from last fetch
+
+function getLocalScores() { try { return JSON.parse(localStorage.getItem('dreamLogicScores') || '[]'); } catch { return []; } }
+function saveLocalScore(ini, stars, nights, mems) {
+  const scores = getLocalScores();
+  scores.push({ ini, stars, nights, mems, date: Date.now() });
+  scores.sort((a, b) => b.stars - a.stars || b.nights - a.nights);
+  if (scores.length > 50) scores.length = 50;
+  localStorage.setItem('dreamLogicScores', JSON.stringify(scores));
+}
+
+function getScores() { return onlineScores || getLocalScores(); }
+
+async function fetchScores() {
+  if (!LEADERBOARD_API) { onlineScores = null; return; }
+  try {
+    const res = await fetch(LEADERBOARD_API + '/scores');
+    if (res.ok) onlineScores = await res.json();
+  } catch (e) { onlineScores = null; }
+}
+
+async function saveScore(ini, stars, nights, mems) {
+  saveLocalScore(ini, stars, nights, mems);
+  if (!LEADERBOARD_API) return;
+  try {
+    const res = await fetch(LEADERBOARD_API + '/scores', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ini, stars, nights, mems }),
+    });
+    if (res.ok) onlineScores = await res.json();
+  } catch (e) { /* localStorage fallback already saved */ }
+}
+
+// fetch on page load
+fetchScores();
+
+// ─── SETTINGS ────────────────────────────────────────────
+const DEFAULT_SETTINGS = { masterVol: 80, musicVol: 60, sfxVol: 80, shake: true, highContrast: false, colorblind: false };
+let settings = { ...DEFAULT_SETTINGS };
+function loadSettings() { try { Object.assign(settings, JSON.parse(localStorage.getItem('dreamLogicSettings'))); } catch {} }
+function saveSettings() { localStorage.setItem('dreamLogicSettings', JSON.stringify(settings)); }
+loadSettings();
+
+// ─── AUDIO BUSES ─────────────────────────────────────────
+let sfxBus, musicBus, masterBus;
+function initBuses() {
+  if (!audioCtx || masterBus) return;
+  masterBus = audioCtx.createGain(); masterBus.connect(audioCtx.destination);
+  sfxBus = audioCtx.createGain(); sfxBus.connect(masterBus);
+  musicBus = audioCtx.createGain(); musicBus.connect(masterBus);
+  applyVolumes();
+}
+function applyVolumes() {
+  if (!masterBus) return;
+  masterBus.gain.value = settings.masterVol / 100;
+  sfxBus.gain.value = settings.sfxVol / 100;
+  musicBus.gain.value = settings.musicVol / 100;
+}
+function sfxDest() { return sfxBus || (audioCtx && audioCtx.destination); }
+function musDest() { return musicBus || (audioCtx && audioCtx.destination); }
+
+// ─── PAUSE MENU ──────────────────────────────────────────
+let pauseMenu = 'main'; // 'main' | 'options' | 'howto' | 'scores'
+let pauseSel = 0;
+let prePauseState = '';  // state to restore on resume
+const PAUSE_MAIN = ['Resume', 'How to Play', 'Options', 'Leaderboard', 'Restart Night', 'Quit to Title'];
+const PAUSE_OPT = ['Master Volume', 'Music Volume', 'SFX Volume', 'Screen Shake', 'High Contrast', 'Colorblind Mode', 'Back'];
+
+function startGame() { initAudio(); initBuses(); startAmbient(); night = 0; totalMemories = 0; totalPuzzles = 0; totalStars = 0; enterDream(); }
+
+function enterDream() {
+  np = nightParams(night);
+  generateLevel();
+  const cx = Math.floor(np.GRID_W / 2), cy = Math.floor(np.GRID_H / 2);
+  player.x = cx; player.y = cy;
+  player.px = cx * CFG.TILE; player.py = cy * CFG.TILE;
+  player.moving = false;
+  waveRadius = 5;
+  visited = [];
+  for (let y = 0; y < np.GRID_H; y++) { visited[y] = []; for (let x = 0; x < np.GRID_W; x++) visited[y][x] = false; }
+  visited[cy][cx] = true;
+  dreamTimer = 0; sleepTimer = 0;
+  memCollected = 0; puzzlesSolved = 0;
+  flashText = ''; flashTimer = 0;
+  alarmPlayed = false; gameTime = 0;
+  particles = [];
+  state = 'sleeping'; sleepTimer = 0;
+}
+
+// ─── INPUT ───────────────────────────────────────────────
+const keys = {}, justPressed = {};
+window.addEventListener('keydown', e => {
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','KeyW','KeyA','KeyS','KeyD','Escape'].includes(e.code)) e.preventDefault();
+  if (!keys[e.code]) justPressed[e.code] = true;
+  keys[e.code] = true;
+
+  // ── pause toggle ──
+  if (e.code === 'Escape') {
+    if (state === 'paused') {
+      if (pauseMenu !== 'main') { pauseMenu = 'main'; pauseSel = 0; }
+      else { state = prePauseState; }
+      return;
+    }
+    if (state === 'dreaming' || state === 'waking') {
+      prePauseState = state; state = 'paused'; pauseMenu = 'main'; pauseSel = 0;
+      return;
+    }
+  }
+
+  // ── pause menu navigation ──
+  if (state === 'paused') {
+    const items = pauseMenu === 'options' ? PAUSE_OPT : pauseMenu === 'main' ? PAUSE_MAIN : [];
+    if (e.code === 'ArrowUp' || e.code === 'KeyW') pauseSel = (pauseSel - 1 + items.length) % items.length;
+    if (e.code === 'ArrowDown' || e.code === 'KeyS') pauseSel = (pauseSel + 1) % items.length;
+
+    if (pauseMenu === 'options') {
+      const adj = (e.code === 'ArrowRight' || e.code === 'KeyD') ? 10 : (e.code === 'ArrowLeft' || e.code === 'KeyA') ? -10 : 0;
+      if (adj) {
+        if (pauseSel === 0) settings.masterVol = Math.max(0, Math.min(100, settings.masterVol + adj));
+        if (pauseSel === 1) settings.musicVol = Math.max(0, Math.min(100, settings.musicVol + adj));
+        if (pauseSel === 2) settings.sfxVol = Math.max(0, Math.min(100, settings.sfxVol + adj));
+        applyVolumes(); saveSettings();
+      }
+    }
+
+    if (e.code === 'Enter' || e.code === 'Space') {
+      if (pauseMenu === 'main') {
+        if (pauseSel === 0) { state = prePauseState; } // Resume
+        if (pauseSel === 1) { pauseMenu = 'howto'; } // How to Play
+        if (pauseSel === 2) { pauseMenu = 'options'; pauseSel = 0; } // Options
+        if (pauseSel === 3) { pauseMenu = 'scores'; } // Leaderboard
+        if (pauseSel === 4) { enterDream(); } // Restart Night
+        if (pauseSel === 5) { state = 'title'; } // Quit
+      } else if (pauseMenu === 'options') {
+        if (pauseSel === 3) { settings.shake = !settings.shake; saveSettings(); }
+        if (pauseSel === 4) { settings.highContrast = !settings.highContrast; saveSettings(); }
+        if (pauseSel === 5) { settings.colorblind = !settings.colorblind; saveSettings(); }
+        if (pauseSel === 6) { pauseMenu = 'main'; pauseSel = 2; } // Back
+      } else {
+        pauseMenu = 'main'; pauseSel = 0; // Back from howto/scores
+      }
+    }
+    return;
+  }
+
+  // ── normal game input ──
+  if (state === 'title' && (e.code === 'Space' || e.code === 'Enter')) startGame();
+  if (state === 'escaped' && resultTimer > 2 && (e.code === 'Space' || e.code === 'Enter')) {
+    totalStars += nightStars();
+    totalMemories += memCollected; totalPuzzles += puzzlesSolved; night++; enterDream();
+  }
+  if (state === 'lost' && resultTimer > 1.5 && (e.code === 'Space' || e.code === 'Enter')) {
+    totalStars += nightStars();
+    totalMemories += memCollected; totalPuzzles += puzzlesSolved;
+    initials = ''; state = 'enterInitials';
+  }
+  if (state === 'enterInitials') {
+    if (e.code === 'Backspace' && initials.length > 0) { initials = initials.slice(0, -1); e.preventDefault(); }
+    else if ((e.code === 'Enter' || e.code === 'Space') && initials.length > 0) {
+      saveScore(initials.toUpperCase(), totalStars, night + 1, totalMemories);
+      fetchScores(); state = 'title';
+    }
+    else if (e.key.length === 1 && /[a-zA-Z]/.test(e.key) && initials.length < 3) {
+      initials += e.key.toUpperCase();
+    }
+  }
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+function getInputDir() {
+  if (justPressed['ArrowUp']||justPressed['KeyW']) return [0,-1];
+  if (justPressed['ArrowDown']||justPressed['KeyS']) return [0,1];
+  if (justPressed['ArrowLeft']||justPressed['KeyA']) return [-1,0];
+  if (justPressed['ArrowRight']||justPressed['KeyD']) return [1,0];
+  if (keys['ArrowUp']||keys['KeyW']) return [0,-1];
+  if (keys['ArrowDown']||keys['KeyS']) return [0,1];
+  if (keys['ArrowLeft']||keys['KeyA']) return [-1,0];
+  if (keys['ArrowRight']||keys['KeyD']) return [1,0];
+  return null;
+}
+function clearJustPressed() { for (const k in justPressed) delete justPressed[k]; }
+
+// ─── WAVE HELPERS ────────────────────────────────────────
+function gridCenter() { return { x: Math.floor(np.GRID_W / 2), y: Math.floor(np.GRID_H / 2) }; }
+function distFromCenter(x, y) {
+  const c = gridCenter();
+  return Math.sqrt((x - c.x) ** 2 + (y - c.y) ** 2);
+}
+function inWave(x, y) { return distFromCenter(x, y) <= waveRadius; }
+
+// ─── GAME LOGIC ──────────────────────────────────────────
+function isPassable(x, y) {
+  if (x < 0 || x >= np.GRID_W || y < 0 || y >= np.GRID_H) return false;
+  if (!inWave(x, y)) return false;
+  const t = grid[y][x];
+  return t === T.FLOOR || t === T.TARGET || t === T.EXTRACT;
+}
+
+function blockAt(x, y) { return blocks.find(b => b.x === x && b.y === y); }
+
+function tryMove(dx, dy) {
+  if (player.moving) return false;
+  const nx = player.x + dx, ny = player.y + dy;
+  const blk = blockAt(nx, ny);
+  if (blk) {
+    const bx = nx + dx, by = ny + dy;
+    if (isPassable(bx, by) && !blockAt(bx, by)) {
+      blk.x = bx; blk.y = by;
+      sndPush(); spawnP((bx+0.5)*CFG.TILE,(by+0.5)*CFG.TILE,5,'#8a7a6a',0.5,0.5);
+      checkPuzzles();
+    } else return false;
+  }
+  if (!isPassable(nx, ny)) return false;
+  player.dx = dx; player.dy = dy; player.moving = true; player.moveT = 0;
+  player.x = nx; player.y = ny; lastMoveDir = {x:dx,y:dy}; sndMove();
+  return true;
+}
+
+function checkPuzzles() {
+  for (const tgt of targets) {
+    const was = tgt.filled;
+    tgt.filled = blocks.some(b => b.x === tgt.x && b.y === tgt.y);
+    if (tgt.filled && !was) { sndPuzzle(); spawnP((tgt.x+0.5)*CFG.TILE,(tgt.y+0.5)*CFG.TILE,20,'#88ffaa',1.5,1); showFlash('Block locked in!'); }
+  }
+  puzzlesSolved = targets.filter(t => t.filled).length;
+}
+
+function checkTileInteractions() {
+  for (const m of memories) {
+    if (!m.collected && m.x === player.x && m.y === player.y) {
+      m.collected = true; memCollected++;
+      sndMemory(); spawnP((m.x+0.5)*CFG.TILE,(m.y+0.5)*CFG.TILE,8,m.color,0.8,0.6);
+      if (memCollected % 50 === 0) {
+        showFlash(`${memCollected} memories — star earned!`);
+        spawnP((m.x+0.5)*CFG.TILE,(m.y+0.5)*CFG.TILE,20,'#ffd700',1.5,1.2);
+        sndPuzzle(); // reuse the triumphant sound
+      } else if (memCollected % 10 === 0) {
+        showFlash(`${memCollected} memories gathered...`);
+      }
+    }
+  }
+  if (state === 'waking' && extractZone && player.x === extractZone.x && player.y === extractZone.y) {
+    state = 'escaped'; resultTimer = 0; sndVictory();
+    spawnP((player.x+0.5)*CFG.TILE,(player.y+0.5)*CFG.TILE,40,'#ffd700',2,2);
+  }
+}
+
+function showFlash(text) { flashText = text; flashTimer = 2.5; }
+
+// ─── UPDATE ──────────────────────────────────────────────
+let lastTime = 0;
+
+function movePlayer(dt) {
+  if (!player.moving) { const dir = getInputDir(); if (dir) tryMove(dir[0], dir[1]); }
+  if (player.moving) {
+    player.moveT += dt;
+    const frac = Math.min(player.moveT / CFG.MOVE_TIME, 1);
+    const ease = frac < 0.5 ? 2*frac*frac : 1 - Math.pow(-2*frac+2, 2)/2;
+    player.px = (player.x - player.dx*(1-ease)) * CFG.TILE;
+    player.py = (player.y - player.dy*(1-ease)) * CFG.TILE;
+    if (frac >= 1) {
+      player.moving = false;
+      player.px = player.x * CFG.TILE; player.py = player.y * CFG.TILE;
+      if (visited[player.y]) visited[player.y][player.x] = true;
+      checkTileInteractions();
+    }
+  }
+}
+
+function update(t) {
+  if (state === 'paused') { lastTime = t; return; } // freeze time
+  const dt = Math.min((t - lastTime) / 1000, 0.05);
+  lastTime = t; gameTime += dt;
+  if (screenShake > 0) screenShake = Math.max(0, screenShake - dt);
+  if (flashTimer > 0) flashTimer -= dt;
+  updateParticles(dt);
+  tickAmbient();
+  tickMusic();
+
+  if (state === 'sleeping') {
+    sleepTimer += dt; updateDust(dt, gameTime);
+    if (sleepTimer > 2.5) state = 'dreaming';
+    return;
+  }
+
+  if (state === 'dreaming') {
+    updateDust(dt, gameTime);
+
+    // dream timer — faster on extraction point
+    let timerMult = 1;
+    if (extractZone && player.x === extractZone.x && player.y === extractZone.y) {
+      timerMult = np.EXTRACT_TIMER_MULT;
+    }
+    dreamTimer += dt * timerMult;
+
+    // expand wave
+    waveRadius += np.WAVE_SPEED * dt;
+
+    movePlayer(dt);
+
+    // transition to waking
+    if (dreamTimer >= np.EXPAND_TIME) {
+      if (extractZone && player.x === extractZone.x && player.y === extractZone.y) {
+        state = 'escaped'; resultTimer = 0; sndVictory();
+        spawnP((player.x+0.5)*CFG.TILE,(player.y+0.5)*CFG.TILE,40,'#ffd700',2,2);
+      } else {
+        state = 'waking'; alarmPlayed = false; alarmTimer = 0;
+        showFlash('WAKING UP! Race to the extraction point!');
+        screenShake = 0.3;
+      }
+    }
+    return;
+  }
+
+  if (state === 'waking') {
+    updateDust(dt, gameTime);
+    alarmTimer += dt;
+    if (!alarmPlayed || alarmTimer > 2) { sndAlarm(); alarmPlayed = true; alarmTimer = 0; }
+
+    // wave retracts
+    waveRadius -= np.COLLAPSE_SPEED * dt;
+    if (waveRadius <= 0) { waveRadius = 0; state = 'lost'; resultTimer = 0; sndDefeat(); return; }
+
+    // collapse sound on boundary movement
+    if (Math.random() < 0.15) { sndCollapse(); screenShake = 0.08; }
+
+    // check player outside wave
+    if (!inWave(player.x, player.y)) {
+      state = 'lost'; resultTimer = 0; sndDefeat();
+      spawnP(player.px+CFG.TILE/2, player.py+CFG.TILE/2, 30, '#8888ff', 2, 1.5);
+      return;
+    }
+
+    movePlayer(dt);
+    return;
+  }
+
+  if (state === 'escaped' || state === 'lost') { resultTimer += dt; updateDust(dt, gameTime); }
+}
+
+// ─── RENDERING ───────────────────────────────────────────
+function getTileVisibility(tx, ty) {
+  const waveDist = distFromCenter(tx, ty);
+  if (waveDist > waveRadius) return 0;
+  const waveFade = Math.min(1, (waveRadius - waveDist) / 2.5);
+  const pdx = tx - player.x, pdy = ty - player.y;
+  const pd = Math.sqrt(pdx*pdx + pdy*pdy);
+  let brightness = pd < 6 ? 1 : pd < 16 ? 1 - (pd-6)/10*0.55 : 0.45;
+  const hc = settings.highContrast ? 1.4 : 1;
+  return Math.min(1, waveFade * brightness * hc);
+}
+
+function tileColor(base, vis) {
+  const hc = settings.highContrast ? 1.5 : 1;
+  return `rgb(${Math.min(255,Math.floor(base[0]*vis*hc))},${Math.min(255,Math.floor(base[1]*vis*hc))},${Math.min(255,Math.floor(base[2]*vis*hc))})`;
+}
+function hex(n) { const h = Math.min(255,Math.max(0,n)).toString(16); return h.length<2?'0'+h:h; }
+
+// colorblind-safe palette: shifts reds/greens to blue/orange distinction
+function cbColor(color) {
+  if (!settings.colorblind) return color;
+  const map = {'#ff88aa':'#ff9944','#88ffaa':'#44aaff','#88ddff':'#88ddff','#ffdd66':'#ffdd66',
+    '#ff8844':'#ffcc22','#66ffdd':'#4488ff','#dd88ff':'#dd88ff','#aa88ff':'#aa88ff',
+    '#ffaa88':'#ffcc44','#88aaff':'#88aaff'};
+  return map[color] || color;
+}
+function cbRgba(r, g, b, a) {
+  if (!settings.colorblind) return `rgba(${r},${g},${b},${a})`;
+  // shift green→blue, keep red distinct via orange
+  if (g > r && g > b) return `rgba(${Math.min(255,r+60)},${Math.floor(g*0.5)},${Math.min(255,b+120)},${a})`;
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+function render(t) {
+  ctx.fillStyle = CFG.BG; ctx.fillRect(0, 0, W, H);
+  const camX = player.px + CFG.TILE/2, camY = player.py + CFG.TILE/2;
+  const doShake = screenShake > 0 && settings.shake;
+  const shakeX = doShake ? (Math.random()-0.5)*8 : 0;
+  const shakeY = doShake ? (Math.random()-0.5)*8 : 0;
+
+  ctx.save();
+  ctx.translate(W/2 - camX + shakeX, H/2 - camY + shakeY);
+
+  if (state === 'sleeping') { renderSleepTransition(t); ctx.restore(); renderSleepingOverlay(t); return; }
+
+  const TS = CFG.TILE;
+  const tilesX = Math.ceil(W/TS/2)+2, tilesY = Math.ceil(H/TS/2)+2;
+  const sx = Math.max(0, player.x-tilesX), ex = Math.min(np.GRID_W-1, player.x+tilesX);
+  const sy = Math.max(0, player.y-tilesY), ey = Math.min(np.GRID_H-1, player.y+tilesY);
+
+  // draw tiles
+  for (let y = sy; y <= ey; y++) {
+    for (let x = sx; x <= ex; x++) {
+      const vis = getTileVisibility(x, y);
+      if (vis <= 0.01) continue;
+      const tile = grid[y][x];
+      const px = x*TS, py = y*TS;
+
+      if (tile === T.WALL) {
+        ctx.fillStyle = tileColor(CFG.WALL_BASE, vis);
+        ctx.fillRect(px, py, TS, TS);
+        ctx.fillStyle = `rgba(60,55,100,${vis*0.3})`;
+        ctx.fillRect(px, py, TS, 2);
+      } else if (tile === T.FLOOR) {
+        const v = ((x*7+y*13)%5)*2;
+        ctx.fillStyle = tileColor([CFG.FLOOR_BASE[0]+v, CFG.FLOOR_BASE[1]+v, CFG.FLOOR_BASE[2]+v], vis);
+        ctx.fillRect(px, py, TS, TS);
+        ctx.strokeStyle = `rgba(255,255,255,${vis*0.03})`;
+        ctx.strokeRect(px+0.5, py+0.5, TS-1, TS-1);
+      } else if (tile === T.TARGET) {
+        ctx.fillStyle = tileColor(CFG.FLOOR_BASE, vis);
+        ctx.fillRect(px, py, TS, TS);
+        const pulse = 0.5+0.5*Math.sin(t*0.003);
+        ctx.fillStyle = cbRgba(100,255,140, vis*(0.15+0.1*pulse));
+        ctx.beginPath(); ctx.arc(px+TS/2, py+TS/2, TS*0.3, 0, Math.PI*2); ctx.fill();
+        ctx.strokeStyle = cbRgba(100,255,140, vis*0.4); ctx.lineWidth = 2; ctx.stroke();
+      } else if (tile === T.EXTRACT) {
+        ctx.fillStyle = tileColor(CFG.FLOOR_BASE, vis);
+        ctx.fillRect(px, py, TS, TS);
+        const pulse = 0.5+0.5*Math.sin(t*0.004);
+        const active = state === 'waking';
+        const onIt = extractZone && player.x === extractZone.x && player.y === extractZone.y;
+        const alpha = (active || onIt) ? vis*(0.3+0.2*pulse) : vis*0.15;
+        ctx.shadowColor = active ? '#ffd700' : '#aa8800';
+        ctx.shadowBlur = (active || onIt) ? 25 : 10;
+        ctx.fillStyle = `rgba(255,215,0,${alpha})`;
+        ctx.fillRect(px+2, py+2, TS-4, TS-4);
+        ctx.shadowBlur = 0;
+        ctx.strokeStyle = `rgba(255,215,0,${vis*((active||onIt)?0.8:0.3)})`;
+        ctx.lineWidth = 2; ctx.beginPath();
+        ctx.moveTo(px+TS/2, py+4); ctx.lineTo(px+TS-4, py+TS/2);
+        ctx.lineTo(px+TS/2, py+TS-4); ctx.lineTo(px+4, py+TS/2);
+        ctx.closePath(); ctx.stroke();
+      }
+
+      // wave edge warning during collapse
+      if (state === 'waking') {
+        const wd = distFromCenter(x, y);
+        if (wd > waveRadius - 3 && wd <= waveRadius) {
+          const warn = 1 - (waveRadius - wd) / 3;
+          ctx.fillStyle = `rgba(100,50,50,${warn*vis*0.5})`;
+          ctx.fillRect(px, py, TS, TS);
+          if (warn > 0.4) {
+            ctx.strokeStyle = `rgba(180,80,80,${warn*vis*0.6})`; ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(px+TS*0.2, py+TS*0.3); ctx.lineTo(px+TS*0.6, py+TS*0.7);
+            ctx.moveTo(px+TS*0.7, py+TS*0.1); ctx.lineTo(px+TS*0.4, py+TS*0.9);
+            ctx.stroke();
+          }
+        }
+      }
+    }
+  }
+
+  // draw blocks
+  for (const b of blocks) {
+    const vis = getTileVisibility(b.x, b.y); if (vis <= 0) continue;
+    const px = b.x*TS+3, py = b.y*TS+3, s = TS-6;
+    ctx.fillStyle = `rgba(130,110,90,${vis})`; ctx.fillRect(px,py,s,s);
+    ctx.fillStyle = `rgba(160,140,110,${vis*0.5})`; ctx.fillRect(px,py,s,3);
+    ctx.fillStyle = `rgba(90,75,60,${vis*0.5})`; ctx.fillRect(px,py+s-3,s,3);
+    ctx.strokeStyle = `rgba(200,180,150,${vis*0.3})`; ctx.strokeRect(px+0.5,py+0.5,s-1,s-1);
+  }
+
+  // draw memories (only nearby for perf with many memories)
+  for (const m of memories) {
+    if (m.collected) continue;
+    const dx = m.x-player.x, dy = m.y-player.y;
+    if (Math.abs(dx) > tilesX+2 || Math.abs(dy) > tilesY+2) continue;
+    const vis = getTileVisibility(m.x, m.y); if (vis <= 0) continue;
+    const px = m.x*TS + TS/2, py = m.y*TS + TS/2 + Math.sin(t*0.003+m.x)*2;
+    const pulse = 0.7+0.3*Math.sin(t*0.005+m.y*0.7);
+    const mc = cbColor(m.color);
+    ctx.shadowColor = mc; ctx.shadowBlur = 10*vis*pulse;
+    ctx.fillStyle = mc + hex(Math.floor(vis*255*pulse));
+    ctx.beginPath(); ctx.arc(px, py, 4, 0, Math.PI*2); ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+
+  // draw player
+  {
+    const px = player.px+TS/2, py = player.py+TS/2, bob = Math.sin(t*0.004)*2;
+    ctx.shadowColor = '#aaccff'; ctx.shadowBlur = 20;
+    ctx.fillStyle = '#dde8ff'; ctx.beginPath(); ctx.arc(px, py+bob, 10, 0, Math.PI*2); ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(px, py+bob, 5, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = 'rgba(200,220,255,0.5)'; ctx.beginPath();
+    ctx.arc(px+lastMoveDir.x*4, py+lastMoveDir.y*4+bob, 2.5, 0, Math.PI*2); ctx.fill();
+    if (player.moving && Math.random()<0.4) spawnP(px-lastMoveDir.x*6, py-lastMoveDir.y*6+bob, 1, '#8899cc', 0.3, 0.5);
+  }
+
+  // particles
+  for (const p of particles) {
+    ctx.globalAlpha = p.life/p.maxLife; ctx.fillStyle = p.color;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.size*(p.life/p.maxLife), 0, Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // dust
+  for (const d of dust) {
+    const vis = getTileVisibility(Math.floor(d.x/TS), Math.floor(d.y/TS));
+    if (vis <= 0) continue;
+    ctx.fillStyle = `rgba(180,190,255,${d.alpha*vis*0.5})`;
+    ctx.beginPath(); ctx.arc(d.x, d.y, d.size, 0, Math.PI*2); ctx.fill();
+  }
+
+  // wave edge glow (expanding dream boundary)
+  if (state === 'dreaming') {
+    const c = gridCenter();
+    const wcx = c.x*TS+TS/2, wcy = c.y*TS+TS/2;
+    const r = waveRadius * TS;
+    ctx.strokeStyle = 'rgba(100,100,200,0.08)'; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(wcx, wcy, r, 0, Math.PI*2); ctx.stroke();
+  }
+
+  ctx.restore();
+  renderHUD(t);
+}
+
+function renderSleepTransition(t) {
+  const TS = CFG.TILE, progress = Math.min(sleepTimer/2.5, 1), ease = progress*progress;
+  if (ease > 0.2) {
+    const alpha = (ease-0.2)/0.8;
+    ctx.globalAlpha = alpha;
+    const vis = ease * 4;
+    for (let y = 0; y < np.GRID_H; y++) for (let x = 0; x < np.GRID_W; x++) {
+      if (distFromCenter(x,y) > vis) continue;
+      const tile = grid[y][x], px = x*TS, py = y*TS;
+      if (tile === T.WALL) { ctx.fillStyle = tileColor(CFG.WALL_BASE, alpha); ctx.fillRect(px,py,TS,TS); }
+      else if (tile >= T.FLOOR) { ctx.fillStyle = tileColor(CFG.FLOOR_BASE, alpha); ctx.fillRect(px,py,TS,TS); }
+    }
+    ctx.fillStyle = `rgba(221,232,255,${alpha})`; ctx.shadowColor = '#aaccff'; ctx.shadowBlur = 20*alpha;
+    ctx.beginPath(); ctx.arc(player.px+TS/2, player.py+TS/2, 10, 0, Math.PI*2); ctx.fill();
+    ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+  }
+}
+
+function renderSleepingOverlay(t) {
+  const progress = Math.min(sleepTimer/2.5, 1);
+  ctx.fillStyle = `rgba(6,6,15,${1-progress})`; ctx.fillRect(0,0,W,H);
+  ctx.textAlign = 'center'; ctx.font = '300 24px Outfit, sans-serif';
+  const ta = progress < 0.5 ? 1 : Math.max(0, 1-(progress-0.5)*4);
+  ctx.fillStyle = `rgba(150,160,200,${ta})`;
+  ctx.fillText(night === 0 ? 'falling asleep...' : `sinking deeper... night ${night+1}`, W/2, H/2-30);
+  for (let i = 0; i < 3; i++) {
+    const zt = (sleepTimer*0.5+i*0.3)%1.5, za = zt<1?zt:Math.max(0,1.5-zt)*2;
+    ctx.font = `${300+zt*100} ${14+zt*10}px Outfit, sans-serif`;
+    ctx.fillStyle = `rgba(140,150,200,${za*0.5*ta})`;
+    ctx.fillText('z', W/2-40+i*30-zt*20, H/2-60-zt*40);
+  }
+}
+
+function renderHUD(t) {
+  ctx.textAlign = 'right'; ctx.font = '400 14px Outfit, sans-serif';
+  ctx.fillStyle = '#6666aa'; ctx.fillText(`Night ${night+1}`, W-20, 28);
+  if (totalMemories > 0 || totalPuzzles > 0) {
+    ctx.font = '300 12px Outfit, sans-serif'; ctx.fillStyle = '#555580';
+    ctx.fillText(`Total: ${totalMemories} memories · ${totalPuzzles} puzzles`, W-20, 46);
+  }
+
+  ctx.textAlign = 'left'; ctx.font = '400 16px Outfit, sans-serif';
+  ctx.fillStyle = '#8888aa'; ctx.fillText(`Memories: ${memCollected}`, 20, 30);
+  if (targets.length > 0) {
+    ctx.fillStyle = '#6a8a6a'; ctx.fillText(`Puzzles: ${puzzlesSolved} / ${targets.length}`, 20, 52);
+  }
+  // stars earned this night
+  const ns = nightStars();
+  if (ns > 0) {
+    ctx.fillStyle = '#bba030'; ctx.fillText(`Stars: ${ns}`, 20, targets.length > 0 ? 74 : 52);
+  }
+
+  // dream depth meter
+  if (state === 'dreaming') {
+    const progress = Math.min(dreamTimer/np.EXPAND_TIME, 1);
+    const barW = 200, barH = 6, bx = W/2-barW/2, by = 20;
+    ctx.fillStyle = '#1a1a2e'; ctx.fillRect(bx, by, barW, barH);
+    const grad = ctx.createLinearGradient(bx, 0, bx+barW, 0);
+    grad.addColorStop(0, '#4444aa'); grad.addColorStop(1, '#aa4444');
+    ctx.fillStyle = grad; ctx.fillRect(bx, by, barW*progress, barH);
+    ctx.textAlign = 'center'; ctx.font = '300 12px Outfit, sans-serif';
+    ctx.fillStyle = '#6666aa';
+    const onExtract = extractZone && player.x === extractZone.x && player.y === extractZone.y;
+    ctx.fillText(onExtract ? 'dream depth (accelerating!)' : 'dream depth', W/2, by+barH+14);
+  }
+
+  // waking indicator
+  if (state === 'waking') {
+    const blink = Math.sin(t*0.01) > 0;
+    ctx.textAlign = 'center'; ctx.font = '600 18px Outfit, sans-serif';
+    ctx.fillStyle = blink ? '#ff4444' : '#aa2222';
+    ctx.fillText('WAKING UP!', W/2, 30);
+    const pct = Math.max(0, waveRadius / (np.WAVE_SPEED * np.EXPAND_TIME) * 100).toFixed(0);
+    ctx.font = '300 14px Outfit, sans-serif'; ctx.fillStyle = '#aa6666';
+    ctx.fillText(`Dream stability: ${Math.min(100, pct)}%`, W/2, 50);
+  }
+
+  // arrow to extraction (during waking, or during dreaming if extraction visible)
+  if ((state === 'waking' || state === 'dreaming') && extractZone) {
+    const dx = extractZone.x-player.x, dy = extractZone.y-player.y;
+    const dist = Math.sqrt(dx*dx+dy*dy);
+    if (dist > 2) {
+      const angle = Math.atan2(dy, dx);
+      const ax = W/2 + Math.cos(angle)*60, ay = H/2 + Math.sin(angle)*60;
+      const urgency = state === 'waking' ? 1 : 0.4;
+      ctx.save(); ctx.translate(ax, ay); ctx.rotate(angle);
+      ctx.fillStyle = `rgba(255,215,0,${(0.3+0.3*Math.sin(t*0.006))*urgency})`;
+      ctx.beginPath(); ctx.moveTo(12,0); ctx.lineTo(-4,-6); ctx.lineTo(-4,6); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  if (flashTimer > 0) {
+    const a = flashTimer > 2 ? 1 : flashTimer/2;
+    ctx.textAlign = 'center'; ctx.font = '400 20px Outfit, sans-serif';
+    ctx.fillStyle = `rgba(220,220,255,${a})`; ctx.fillText(flashText, W/2, H-60);
+  }
+  if (state === 'dreaming' && dreamTimer < 5) {
+    const a = Math.max(0, 1-dreamTimer/5);
+    ctx.textAlign = 'center'; ctx.font = '300 14px Outfit, sans-serif';
+    ctx.fillStyle = `rgba(120,120,160,${a})`; ctx.fillText('Arrow keys or WASD to move', W/2, H-30);
+  }
+
+  // ── MINIMAP ──
+  renderMinimap(t);
+}
+
+function renderMinimap(t) {
+  const size = Math.min(160, Math.min(W, H) * 0.2); // responsive size
+  const margin = 12;
+  const mx = W - size - margin, my = H - size - margin;
+  const scale = size / np.GRID_W; // pixels per tile on minimap
+  const c = gridCenter();
+
+  // background
+  ctx.fillStyle = 'rgba(6,6,20,0.75)';
+  ctx.fillRect(mx - 1, my - 1, size + 2, size + 2);
+
+  // wave circle (dream boundary)
+  const wcx = mx + c.x * scale, wcy = my + c.y * scale;
+  const wr = waveRadius * scale;
+  ctx.save();
+  ctx.beginPath(); ctx.arc(wcx, wcy, Math.max(0, wr), 0, Math.PI * 2); ctx.clip();
+
+  // visited trail (the key feature — shows where you've been)
+  for (let y = 0; y < np.GRID_H; y++) {
+    for (let x = 0; x < np.GRID_W; x++) {
+      if (!inWave(x, y)) continue;
+      const px = mx + x * scale, py = my + y * scale;
+      const tile = grid[y][x];
+
+      if (visited[y] && visited[y][x]) {
+        // visited floor — bright trail
+        ctx.fillStyle = tile >= T.FLOOR ? 'rgba(120,115,180,0.7)' : 'rgba(50,45,80,0.4)';
+        ctx.fillRect(px, py, Math.ceil(scale), Math.ceil(scale));
+      } else if (tile >= T.FLOOR) {
+        // unvisited floor within wave — dim
+        ctx.fillStyle = 'rgba(40,38,70,0.35)';
+        ctx.fillRect(px, py, Math.ceil(scale), Math.ceil(scale));
+      }
+    }
+  }
+
+  // extraction point — gold pulse
+  if (extractZone) {
+    const epx = mx + extractZone.x * scale, epy = my + extractZone.y * scale;
+    const pulse = 0.6 + 0.4 * Math.sin(t * 0.005);
+    const es = Math.max(3, scale * 2.5);
+    ctx.fillStyle = `rgba(255,215,0,${pulse * 0.9})`;
+    ctx.fillRect(epx - es/2 + scale/2, epy - es/2 + scale/2, es, es);
+  }
+
+  // uncollected memories — tiny dots (only within wave)
+  for (const m of memories) {
+    if (m.collected || !inWave(m.x, m.y)) continue;
+    const mpx = mx + m.x * scale + scale/2, mpy = my + m.y * scale + scale/2;
+    ctx.fillStyle = 'rgba(200,180,255,0.3)';
+    ctx.fillRect(mpx - 0.5, mpy - 0.5, 1, 1);
+  }
+
+  // player — white dot
+  const ppx = mx + player.x * scale + scale/2, ppy = my + player.y * scale + scale/2;
+  const ps = Math.max(2.5, scale * 1.5);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(ppx - ps/2, ppy - ps/2, ps, ps);
+
+  ctx.restore(); // unclip
+
+  // wave boundary ring on minimap
+  const waveColor = state === 'waking' ? 'rgba(200,80,80,0.5)' : 'rgba(100,100,200,0.3)';
+  ctx.strokeStyle = waveColor; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(wcx, wcy, Math.max(0, wr), 0, Math.PI * 2); ctx.stroke();
+
+  // border
+  ctx.strokeStyle = 'rgba(80,80,120,0.4)'; ctx.lineWidth = 1;
+  ctx.strokeRect(mx - 1, my - 1, size + 2, size + 2);
+}
+
+// ─── PAUSE MENU RENDERING ────────────────────────────────
+function renderPause(t) {
+  // dim the game underneath
+  ctx.fillStyle = 'rgba(6,6,15,0.88)'; ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+
+  if (pauseMenu === 'main') {
+    ctx.font = '600 32px Outfit, sans-serif'; ctx.fillStyle = '#c8c0e0';
+    ctx.fillText('Paused', W/2, H/2 - 130);
+
+    // run stats
+    ctx.font = '300 13px Outfit, sans-serif'; ctx.fillStyle = '#6666aa';
+    const rs = totalStars + nightStars();
+    ctx.fillText(`Night ${night+1}  ·  ${memCollected} memories  ·  ${puzzlesSolved} puzzles  ·  ${rs} stars`, W/2, H/2 - 100);
+
+    PAUSE_MAIN.forEach((item, i) => {
+      const sel = i === pauseSel;
+      const y = H/2 - 50 + i * 36;
+      ctx.font = sel ? '600 20px Outfit, sans-serif' : '300 18px Outfit, sans-serif';
+      ctx.fillStyle = sel ? '#e0daf0' : '#6a6688';
+      ctx.fillText((sel ? '> ' : '  ') + item, W/2, y);
+    });
+
+    ctx.font = '300 12px Outfit, sans-serif'; ctx.fillStyle = '#444460';
+    ctx.fillText('ESC to resume  ·  arrows to navigate  ·  enter to select', W/2, H/2 + 180);
+
+  } else if (pauseMenu === 'options') {
+    ctx.font = '600 28px Outfit, sans-serif'; ctx.fillStyle = '#c8c0e0';
+    ctx.fillText('Options', W/2, H/2 - 140);
+
+    PAUSE_OPT.forEach((item, i) => {
+      const sel = i === pauseSel;
+      const y = H/2 - 80 + i * 36;
+      ctx.font = sel ? '400 18px Outfit, sans-serif' : '300 16px Outfit, sans-serif';
+      ctx.fillStyle = sel ? '#e0daf0' : '#6a6688';
+      let label = item;
+      let val = '';
+      if (i === 0) val = drawSlider(settings.masterVol);
+      else if (i === 1) val = drawSlider(settings.musicVol);
+      else if (i === 2) val = drawSlider(settings.sfxVol);
+      else if (i === 3) val = settings.shake ? 'ON' : 'OFF';
+      else if (i === 4) val = settings.highContrast ? 'ON' : 'OFF';
+      else if (i === 5) val = settings.colorblind ? 'ON' : 'OFF';
+      const prefix = sel ? '> ' : '  ';
+      if (val) {
+        ctx.fillText(prefix + label + ':  ' + val, W/2, y);
+      } else {
+        ctx.fillText(prefix + label, W/2, y);
+      }
+    });
+
+    ctx.font = '300 12px Outfit, sans-serif'; ctx.fillStyle = '#444460';
+    ctx.fillText('up/down to navigate  ·  left/right to adjust  ·  enter to toggle  ·  ESC back', W/2, H/2 + 180);
+
+  } else if (pauseMenu === 'howto') {
+    ctx.font = '600 28px Outfit, sans-serif'; ctx.fillStyle = '#c8c0e0';
+    ctx.fillText('How to Play', W/2, H/2 - 150);
+    const lines = [
+      ['Move', 'Arrow keys or WASD'],
+      ['Pause', 'Escape'],
+      ['', ''],
+      ['Explore', 'The dream wave expands outward — explore the frontier'],
+      ['Collect', 'Walk over glowing orbs to gather memories'],
+      ['Puzzles', 'Push blocks onto green target circles'],
+      ['Extract', 'Stand on the gold diamond to speed up the timer'],
+      ['', ''],
+      ['Stars', '1 star per puzzle  ·  1 star per 50 memories'],
+      ['Wake', 'When the timer fills, the dream collapses inward'],
+      ['Survive', 'Race to the extraction point before it dissolves!'],
+    ];
+    lines.forEach((line, i) => {
+      const y = H/2 - 105 + i * 24;
+      if (line[0]) {
+        ctx.font = '600 14px Outfit, sans-serif'; ctx.fillStyle = '#8888bb';
+        ctx.textAlign = 'right'; ctx.fillText(line[0], W/2 - 10, y);
+        ctx.font = '300 14px Outfit, sans-serif'; ctx.fillStyle = '#9999aa';
+        ctx.textAlign = 'left'; ctx.fillText(line[1], W/2 + 10, y);
+      }
+    });
+    ctx.textAlign = 'center';
+    ctx.font = '300 13px Outfit, sans-serif'; ctx.fillStyle = '#555570';
+    ctx.fillText('press enter or ESC to go back', W/2, H/2 + 180);
+
+  } else if (pauseMenu === 'scores') {
+    ctx.font = '600 28px Outfit, sans-serif'; ctx.fillStyle = '#c8c0e0';
+    ctx.fillText('Leaderboard', W/2, H/2 - 140);
+    const scores = getScores();
+    if (scores.length === 0) {
+      ctx.font = '300 16px Outfit, sans-serif'; ctx.fillStyle = '#6a6688';
+      ctx.fillText('No scores yet — finish a run!', W/2, H/2);
+    } else {
+      const lbl = (LEADERBOARD_API && onlineScores) ? 'online' : 'local';
+      ctx.font = '300 12px Outfit, sans-serif'; ctx.fillStyle = '#444460';
+      ctx.fillText(lbl, W/2, H/2 - 115);
+      scores.slice(0, 10).forEach((s, i) => {
+        const y = H/2 - 85 + i * 22;
+        ctx.font = i === 0 ? '400 15px Outfit, sans-serif' : '300 14px Outfit, sans-serif';
+        ctx.fillStyle = i === 0 ? '#bba040' : '#7777aa';
+        ctx.fillText(`${i+1}. ${s.ini}  —  ${s.stars} stars  ·  ${s.nights} nights  ·  ${s.mems} memories`, W/2, y);
+      });
+    }
+    ctx.font = '300 13px Outfit, sans-serif'; ctx.fillStyle = '#555570';
+    ctx.fillText('press enter or ESC to go back', W/2, H/2 + 180);
+  }
+}
+
+function drawSlider(val) {
+  const filled = Math.round(val / 10);
+  return '[' + '='.repeat(filled) + '-'.repeat(10 - filled) + '] ' + val + '%';
+}
+
+// ─── RESULT SCREENS ──────────────────────────────────────
+const WISDOMS = [
+  "The dream slipped away before I could grasp it...",
+  "Something flickered... was it a door? Or a window?",
+  "It came to me in a dream!\nEverything is connected somehow...",
+  "It came to me in a dream!\nEvery obstacle is just a puzzle\nwaiting to be seen from the right angle.",
+  "It came to me in a dream!\nThe pieces were always there.\nI just needed to dream them together.",
+  "It came to me in a dream!\nWhat we forget while waking\nthe sleeping mind remembers.",
+  "It came to me in a dream!\nThe deeper you go\nthe more the pieces fit.",
+  "It came to me in a dream!\nThe connections we overlook while awake\nare the bridges we build while we sleep.",
+  "It came to me in a dream!\nEvery night is a door.\nBehind each one — another self, waiting.",
+];
+
+function getWisdom() {
+  // scale with memories: 0-5 → low, 5-20 → mid, 20+ → high
+  const score = memCollected + puzzlesSolved * 5;
+  if (score < 3) return WISDOMS[0];
+  if (score < 8) return WISDOMS[1];
+  if (score < 15) return WISDOMS[2];
+  if (score < 25) return WISDOMS[3 + (night % 3)];
+  if (score < 40) return WISDOMS[5 + (night % 2)];
+  return WISDOMS[7 + (night % 2)];
+}
+
+function drawStarsRow(cx, cy, count, maxShow, t, ease) {
+  const spacing = 22;
+  const shown = Math.min(count, maxShow);
+  const startX = cx - (shown - 1) * spacing / 2;
+  for (let i = 0; i < shown; i++) {
+    const delay = i * 0.15;
+    const a = Math.min(1, Math.max(0, (resultTimer - 1 - delay) * 2));
+    if (a <= 0) continue;
+    const pulse = 0.7 + 0.3 * Math.sin(t * 0.005 + i * 0.5);
+    const scale = 0.5 + a * 0.5;
+    ctx.shadowColor = '#ffd700'; ctx.shadowBlur = 15 * pulse * a;
+    ctx.fillStyle = `rgba(255,215,0,${a * ease * pulse})`;
+    drawStar(ctx, startX + i * spacing, cy, 9 * scale, 4 * scale, 5);
+    ctx.shadowBlur = 0;
+  }
+  if (count > maxShow) {
+    ctx.font = '400 14px Outfit, sans-serif';
+    ctx.fillStyle = `rgba(255,215,0,${ease * 0.7})`;
+    ctx.fillText(`+${count - maxShow}`, startX + shown * spacing + 5, cy + 5);
+  }
+}
+
+function renderResult(t) {
+  const isWin = state === 'escaped';
+  const fadeIn = Math.min(resultTimer / 1.5, 1), ease = 1 - Math.pow(1 - fadeIn, 3);
+  ctx.fillStyle = `rgba(6,6,15,${ease * 0.85})`; ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+
+  const ns = nightStars();
+  const rs = isWin ? totalStars + ns : totalStars + ns; // total including this night
+
+  if (isWin) {
+    const charY = H / 2 - 100, sitUp = Math.min(1, Math.max(0, resultTimer - 0.5) * 2);
+    // bed + character
+    ctx.fillStyle = `rgba(60,50,80,${ease})`; roundRect(ctx, W/2-60, charY+20, 120, 30, 5); ctx.fill();
+    ctx.fillStyle = `rgba(80,70,120,${ease})`; roundRect(ctx, W/2-50, charY+15, 100, 25, 5); ctx.fill();
+    ctx.fillStyle = `rgba(200,190,220,${ease})`; ctx.beginPath();
+    ctx.arc(W/2, charY+10-sitUp*30, 12, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = `rgba(160,150,190,${ease})`; ctx.fillRect(W/2-6, charY+22-sitUp*30, 12, 20);
+
+    // stars above head — show this night's earned stars
+    if (ns > 0) drawStarsRow(W / 2, charY - 30 - sitUp * 30, ns, 12, t, ease);
+
+    // wisdom text
+    if (resultTimer > 1.5) {
+      const ta2 = Math.min(1, (resultTimer - 1.5) * 1.5);
+      const lines = getWisdom().split('\n');
+      lines.forEach((line, i) => {
+        if (i === 0 && line.startsWith('It came')) { ctx.font = '600 22px Outfit, sans-serif'; ctx.fillStyle = `rgba(255,230,180,${ta2*ease})`; }
+        else { ctx.font = '300 18px Outfit, sans-serif'; ctx.fillStyle = `rgba(200,195,220,${ta2*ease})`; }
+        ctx.fillText(line, W / 2, charY + 85 + i * 28);
+      });
+    }
+    if (resultTimer > 2.2) {
+      const ma = Math.min(1, (resultTimer - 2.2) * 1.5);
+      ctx.font = '300 14px Outfit, sans-serif'; ctx.fillStyle = `rgba(140,140,170,${ma*ease})`;
+      ctx.fillText(`Night ${night+1}  ·  ${memCollected} memories  ·  ${puzzlesSolved} puzzles  ·  ${ns} stars`, W/2, H/2+125);
+      if (totalStars > 0) {
+        ctx.fillStyle = `rgba(255,215,0,${ma*ease*0.5})`;
+        ctx.fillText(`Run total: ${totalStars + ns} stars across ${night+1} nights`, W/2, H/2+147);
+      }
+    }
+    if (resultTimer > 3) {
+      ctx.font = '300 16px Outfit, sans-serif';
+      ctx.fillStyle = `rgba(120,120,160,${0.4+0.2*Math.sin(t*0.003)})`;
+      ctx.fillText('press space to sleep deeper...', W/2, H/2+185);
+    }
+  } else {
+    // ── LOST ──
+    ctx.font = '600 28px Outfit, sans-serif'; ctx.fillStyle = `rgba(200,120,120,${ease})`;
+    ctx.fillText('You woke up too fast', W/2, H/2 - 80);
+
+    // show total stars for the whole run
+    if (rs > 0) drawStarsRow(W / 2, H / 2 - 40, rs, 15, t, ease);
+
+    ctx.font = '300 16px Outfit, sans-serif'; ctx.fillStyle = `rgba(160,140,160,${ease})`;
+    ctx.fillText('The dream scattered before you could hold on...', W/2, H/2);
+
+    if (resultTimer > 1.5) {
+      const ma = Math.min(1, (resultTimer - 1.5) * 1.5);
+      ctx.font = '300 14px Outfit, sans-serif'; ctx.fillStyle = `rgba(140,140,170,${ma*ease})`;
+      const info = night > 0 ? `${night+1} nights  ·  ${totalMemories+memCollected} memories  ·  ${rs} stars` :
+        `${memCollected} memories  ·  ${rs} stars`;
+      ctx.fillText(info, W/2, H/2 + 30);
+    }
+
+    if (resultTimer > 2) {
+      ctx.font = '300 16px Outfit, sans-serif';
+      ctx.fillStyle = `rgba(120,120,160,${0.4+0.2*Math.sin(t*0.003)})`;
+      ctx.fillText('press space to continue', W/2, H/2 + 75);
+    }
+  }
+}
+
+function renderInitials(t) {
+  ctx.fillStyle = 'rgba(6,6,15,0.92)'; ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+
+  // stars recap
+  ctx.shadowColor = '#ffd700'; ctx.shadowBlur = 20;
+  ctx.fillStyle = '#ffd700'; ctx.font = '600 36px Outfit, sans-serif';
+  ctx.fillText(`${totalStars} stars`, W/2, H/2 - 100);
+  ctx.shadowBlur = 0;
+
+  ctx.font = '300 16px Outfit, sans-serif'; ctx.fillStyle = '#8888aa';
+  ctx.fillText(`${night + 1} nights  ·  ${totalMemories} memories`, W/2, H/2 - 70);
+
+  // prompt
+  ctx.font = '400 20px Outfit, sans-serif'; ctx.fillStyle = '#c0b8d0';
+  ctx.fillText('Enter your initials', W/2, H/2 - 20);
+
+  // initials display
+  const letters = initials.padEnd(3, '_');
+  ctx.font = '600 48px Outfit, monospace';
+  const spacing = 50;
+  const startX = W / 2 - spacing;
+  for (let i = 0; i < 3; i++) {
+    const ch = letters[i];
+    const isCursor = i === initials.length && ch === '_';
+    const blink = isCursor ? (Math.sin(t * 0.006) > 0 ? 1 : 0.3) : 1;
+    ctx.fillStyle = ch === '_' ? `rgba(80,80,120,${blink})` : `rgba(220,215,240,${blink})`;
+    ctx.fillText(ch, startX + i * spacing, H / 2 + 40);
+  }
+
+  // hint
+  ctx.font = '300 14px Outfit, sans-serif'; ctx.fillStyle = '#555570';
+  ctx.fillText('type 1-3 letters, then press enter', W/2, H / 2 + 80);
+
+  // show leaderboard preview
+  const scores = getScores();
+  if (scores.length > 0) {
+    ctx.font = '300 13px Outfit, sans-serif'; ctx.fillStyle = '#444460';
+    ctx.fillText('HIGH SCORES', W/2, H/2 + 120);
+    const top = scores.slice(0, 5);
+    top.forEach((s, i) => {
+      ctx.fillStyle = '#555575'; ctx.textAlign = 'center';
+      ctx.fillText(`${s.ini}  ${s.stars} stars  ${s.nights} nights`, W/2, H/2 + 142 + i * 20);
+    });
+  }
+}
+
+function drawStar(c2, cx, cy, oR, iR, pts) {
+  c2.beginPath();
+  for (let i=0;i<pts*2;i++) { const r=i%2===0?oR:iR, a=i*Math.PI/pts-Math.PI/2;
+    i===0?c2.moveTo(cx+Math.cos(a)*r,cy+Math.sin(a)*r):c2.lineTo(cx+Math.cos(a)*r,cy+Math.sin(a)*r); }
+  c2.closePath(); c2.fill();
+}
+function roundRect(c2,x,y,w,h,r) {
+  c2.beginPath(); c2.moveTo(x+r,y); c2.lineTo(x+w-r,y); c2.quadraticCurveTo(x+w,y,x+w,y+r);
+  c2.lineTo(x+w,y+h-r); c2.quadraticCurveTo(x+w,y+h,x+w-r,y+h); c2.lineTo(x+r,y+h);
+  c2.quadraticCurveTo(x,y+h,x,y+h-r); c2.lineTo(x,y+r); c2.quadraticCurveTo(x,y,x+r,y); c2.closePath();
+}
+
+// ─── TITLE SCREEN ────────────────────────────────────────
+function renderTitle(t) {
+  ctx.fillStyle = CFG.BG; ctx.fillRect(0,0,W,H);
+  for (let i=0;i<30;i++) {
+    const phase=i*0.5+t*0.0003;
+    const px=W/2+Math.sin(phase*1.3+i)*(100+i*8), py=H/2+Math.cos(phase*0.9+i*0.7)*(60+i*5);
+    ctx.fillStyle=`rgba(150,160,220,${0.1+Math.sin(phase)*0.05})`;
+    ctx.beginPath(); ctx.arc(px,py,1+Math.sin(phase*2)*0.5,0,Math.PI*2); ctx.fill();
+  }
+  const charX=W/2, charY=H/2+30;
+  ctx.fillStyle='#2a2240'; roundRect(ctx,charX-70,charY+5,140,35,6); ctx.fill();
+  ctx.fillStyle='#332850'; roundRect(ctx,charX+50,charY-15,15,55,4); ctx.fill();
+  ctx.fillStyle='#3a3060'; roundRect(ctx,charX-55,charY,100,28,5); ctx.fill();
+  ctx.fillStyle='#4a4070'; roundRect(ctx,charX+30,charY+2,25,16,6); ctx.fill();
+  ctx.fillStyle='#c0b8d0'; ctx.beginPath(); ctx.arc(charX+35,charY+4,10,0,Math.PI*2); ctx.fill();
+  for (let i=0;i<3;i++) {
+    const zt=((t*0.001+i*0.4)%2)/2, za=zt<0.7?1:Math.max(0,(1-zt)/0.3);
+    ctx.font=`300 ${12+zt*8}px Outfit, sans-serif`; ctx.fillStyle=`rgba(140,150,200,${za*0.4})`;
+    ctx.textAlign='center'; ctx.fillText('z',charX+50+i*15+zt*10,charY-15-zt*30-i*8);
+  }
+  const bubbleY=charY-50;
+  for (let i=0;i<3;i++) { ctx.fillStyle=`rgba(60,55,90,${0.3+i*0.1})`;
+    ctx.beginPath(); ctx.arc(charX+30-i*15,bubbleY-i*18,3+i*2,0,Math.PI*2); ctx.fill(); }
+  ctx.textAlign='center'; ctx.font='600 48px Outfit, sans-serif';
+  ctx.fillStyle='#c8c0e0'; ctx.shadowColor='#6666aa'; ctx.shadowBlur=30;
+  ctx.fillText('Dream Logic', W/2, H/2-100); ctx.shadowBlur=0;
+  ctx.font='300 16px Outfit, sans-serif'; ctx.fillStyle='#6a6688';
+  ctx.fillText('explore the sleeping mind', W/2, H/2-70);
+  const iy=H/2+100; ctx.font='300 14px Outfit, sans-serif'; ctx.fillStyle='#555570';
+  ctx.fillText('The dream expands — explore outward, collect memories, solve puzzles', W/2, iy);
+  ctx.fillText('Stand on the extraction point to speed up the dream', W/2, iy+22);
+  ctx.fillText('When you wake, race to extraction before the dream collapses', W/2, iy+44);
+  ctx.fillText('Arrow keys / WASD to move  ·  Push blocks onto glowing targets', W/2, iy+72);
+  ctx.font='400 18px Outfit, sans-serif';
+  ctx.fillStyle=`rgba(180,175,210,${0.5+0.3*Math.sin(t*0.004)})`;
+  ctx.fillText('press space to sleep', W/2, iy+115);
+
+  // leaderboard
+  const scores = getScores();
+  if (scores.length > 0) {
+    const lx = W/2, ly = iy + 155;
+    ctx.font = '400 13px Outfit, sans-serif'; ctx.fillStyle = '#444460';
+    const lbLabel = (LEADERBOARD_API && onlineScores) ? 'LEADERBOARD  ·  online' : 'LEADERBOARD  ·  local';
+    ctx.fillText(lbLabel, lx, ly);
+    ctx.font = '300 12px Outfit, sans-serif';
+    const top = scores.slice(0, 7);
+    top.forEach((s, i) => {
+      const col = i === 0 ? '#8888aa' : '#555575';
+      ctx.fillStyle = col;
+      ctx.fillText(`${i+1}. ${s.ini}  —  ${s.stars} stars  ·  ${s.nights} nights  ·  ${s.mems} memories`, lx, ly + 18 + i * 17);
+    });
+  }
+}
+
+// ─── MAIN LOOP ───────────────────────────────────────────
+function frame(t) {
+  update(t); clearJustPressed();
+  if (state==='title') renderTitle(t);
+  else if (state==='sleeping') render(t);
+  else if (state==='dreaming'||state==='waking') render(t);
+  else if (state==='paused') { render(t); renderPause(t); }
+  else if (state==='escaped'||state==='lost') { render(t); renderResult(t); }
+  else if (state==='enterInitials') renderInitials(t);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
