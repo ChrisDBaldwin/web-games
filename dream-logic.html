@@ -17,7 +17,8 @@ canvas{display:block}
 // ─── CONFIG ──────────────────────────────────────────────
 const CFG = {
   TILE: 40,
-  MOVE_TIME: 0.1,
+  MOVE_TIME: 0.08,
+  MOVE_LERP: 18,
   PARTICLE_MAX: 300,
   BG: '#06060f',
   FLOOR_BASE: [30, 28, 58],
@@ -109,6 +110,13 @@ function sndAlarm() {
   playTone(880, 0.12, 'square', 0.06);
   setTimeout(() => playTone(660, 0.12, 'square', 0.06), 150);
 }
+function sndComboStep(idx) {
+  const note = 440 * Math.pow(2, idx / 10); // chromatic rise across 10 steps
+  playTone(note, 0.12, 'sine', 0.1);
+  playTone(note * 1.5, 0.08, 'sine', 0.04);
+}
+function sndComboBreak() { playToneFiltered(150, 0.2, 'sawtooth', 0.06, 300); playNoise(0.1, 0.04, 500); }
+function sndSwitch() { playTone(330, 0.15, 'triangle', 0.08); playTone(440, 0.15, 'sine', 0.06); }
 function sndCollapse() { playNoise(0.4, 0.05, 200); playToneFiltered(40, 0.4, 'sawtooth', 0.04, 120); }
 function sndVictory() {
   [262,330,392,523,659].forEach((f,i) => setTimeout(() => {
@@ -398,13 +406,13 @@ function updateDust(dt, t) {
 }
 
 // ─── LEVEL GENERATION ────────────────────────────────────
-let grid = [], rooms = [], blocks = [], targets = [], memories = [];
-let extractZone = null, puzzlesSolved = 0;
+let grid = [], rooms = [], blocks = [], targets = [], memories = [], switches = [];
+let extractZone = null, puzzlesSolved = 0, combosCompleted = 0;
 const MEMORY_COLORS = ['#ff88aa','#aa88ff','#88ddff','#ffdd66','#88ffaa','#ff8844','#dd88ff','#66ffdd','#ffaa88','#88aaff'];
 
 function generateLevel() {
   const GW = np.GRID_W, GH = np.GRID_H;
-  grid = []; rooms = []; blocks = []; targets = []; memories = []; puzzlesSolved = 0;
+  grid = []; rooms = []; blocks = []; targets = []; memories = []; switches = []; puzzlesSolved = 0; combosCompleted = 0;
 
   for (let y = 0; y < GH; y++) { grid[y] = []; for (let x = 0; x < GW; x++) grid[y][x] = T.WALL; }
 
@@ -482,22 +490,67 @@ function generateLevel() {
     memories.push({ x: ft.x, y: ft.y, color: MEMORY_COLORS[i % MEMORY_COLORS.length], collected: false });
   }
 
-  // block puzzles — 1:1 guaranteed solvable
+  // block puzzles — varied directions
+  const BLOCK_OFFSETS = [[0,2],[0,-2],[2,0],[-2,0]]; // below, above, right, left
   const puzzleRooms = rooms.filter(r => r !== centerRoom && r.w >= 5 && r.h >= 5).sort(() => Math.random() - 0.5);
-  for (let i = 0; i < np.PUZZLE_ROOMS && i < puzzleRooms.length; i++) {
+  const halfPuzzle = Math.ceil(np.PUZZLE_ROOMS / 2);
+  for (let i = 0; i < halfPuzzle && i < puzzleRooms.length; i++) {
     const r = puzzleRooms[i];
     let placed = false;
-    for (let attempt = 0; attempt < 15 && !placed; attempt++) {
-      const tx = r.x + 1 + Math.floor(Math.random() * (r.w - 2));
-      const ty = r.y + 1 + Math.floor(Math.random() * Math.max(1, r.h - 4));
-      const bx = tx, by = ty + 2;
-      if (by >= r.y + 1 && by < r.y + r.h - 1 &&
-          grid[ty][tx] === T.FLOOR && grid[by][bx] === T.FLOOR &&
-          !hasEntity(tx, ty) && !hasEntity(bx, by)) {
-        grid[ty][tx] = T.TARGET;
-        targets.push({ x: tx, y: ty, filled: false });
-        blocks.push({ x: bx, y: by });
-        placed = true;
+    const offsets = BLOCK_OFFSETS.slice().sort(() => Math.random() - 0.5);
+    for (const [odx, ody] of offsets) {
+      if (placed) break;
+      for (let attempt = 0; attempt < 15 && !placed; attempt++) {
+        const tx = r.x + 2 + Math.floor(Math.random() * (r.w - 4));
+        const ty = r.y + 2 + Math.floor(Math.random() * (r.h - 4));
+        const bx = tx + odx, by = ty + ody;
+        if (bx >= r.x+1 && bx < r.x+r.w-1 && by >= r.y+1 && by < r.y+r.h-1 &&
+            grid[ty][tx] === T.FLOOR && grid[by][bx] === T.FLOOR &&
+            !hasEntity(tx, ty) && !hasEntity(bx, by)) {
+          grid[ty][tx] = T.TARGET;
+          targets.push({ x: tx, y: ty, filled: false });
+          blocks.push({ x: bx, y: by });
+          placed = true;
+        }
+      }
+    }
+  }
+
+  // color-switch combo puzzles
+  const COMBO_LEN = 10;
+  const COMBO_COLORS = ['#ff4466','#ff8833','#ffcc22','#66ff44','#22ddaa','#22ccff','#4488ff','#8844ff','#cc44ff','#ff44aa'];
+  for (let i = halfPuzzle; i < np.PUZZLE_ROOMS && i < puzzleRooms.length; i++) {
+    const r = puzzleRooms[i];
+    // find a switch position near center of room
+    const sx = r.cx, sy = r.cy;
+    if (grid[sy][sx] !== T.FLOOR || hasEntity(sx, sy)) continue;
+    // lay out combo orbs — walk a random path through the room
+    const seq = [];
+    const used = new Set([`${sx},${sy}`]);
+    let cx2 = sx, cy2 = sy;
+    const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+    for (let j = 0; j < COMBO_LEN; j++) {
+      const shuffDirs = dirs.slice().sort(() => Math.random() - 0.5);
+      let placed2 = false;
+      for (const [ddx, ddy] of shuffDirs) {
+        const nx = cx2 + ddx, ny = cy2 + ddy;
+        if (nx >= r.x+1 && nx < r.x+r.w-1 && ny >= r.y+1 && ny < r.y+r.h-1 &&
+            grid[ny][nx] === T.FLOOR && !used.has(`${nx},${ny}`) && !hasEntity(nx, ny)) {
+          seq.push({ x: nx, y: ny, color: COMBO_COLORS[j], collected: false });
+          used.add(`${nx},${ny}`);
+          cx2 = nx; cy2 = ny;
+          placed2 = true;
+          break;
+        }
+      }
+      if (!placed2) break;
+    }
+    if (seq.length === COMBO_LEN) {
+      switches.push({ x: sx, y: sy, activated: false, sequence: seq, comboIndex: 0, completed: false });
+      // clear any memories that overlap switch or sequence tiles
+      const switchTiles = new Set([`${sx},${sy}`, ...seq.map(s => `${s.x},${s.y}`)]);
+      for (let mi = memories.length - 1; mi >= 0; mi--) {
+        if (switchTiles.has(`${memories[mi].x},${memories[mi].y}`)) memories.splice(mi, 1);
       }
     }
   }
@@ -520,12 +573,13 @@ function carveCorridor(a, b) {
   if (grid[y][x] === T.WALL) grid[y][x] = T.FLOOR;
 }
 function hasEntity(x, y) {
-  return blocks.some(b => b.x === x && b.y === y) || memories.some(m => m.x === x && m.y === y);
+  return blocks.some(b => b.x === x && b.y === y) || memories.some(m => m.x === x && m.y === y) ||
+    switches.some(s => s.x === x && s.y === y || s.sequence && s.sequence.some(o => o.x === x && o.y === y));
 }
 
 // ─── GAME STATE ──────────────────────────────────────────
 let state = 'title';
-let player = { x: 0, y: 0, px: 0, py: 0, moving: false, moveT: 0, dx: 0, dy: 0 };
+let player = { x: 0, y: 0, px: 0, py: 0, moveCooldown: 0, dx: 0, dy: 0 };
 let visited = [];           // 2D bool — tiles player has stepped on
 let waveRadius = 5;        // current dream boundary from grid center
 let dreamTimer = 0;
@@ -533,18 +587,19 @@ let sleepTimer = 0, resultTimer = 0, screenShake = 0, alarmTimer = 0;
 let alarmPlayed = false, memCollected = 0;
 let flashText = '', flashTimer = 0;
 let lastMoveDir = { x: 0, y: 1 };
+let smoothCamX = 0, smoothCamY = 0, camInited = false;
 let gameTime = 0;
 let night = 0, totalMemories = 0, totalPuzzles = 0, totalStars = 0;
 let np = nightParams(0);
 let initials = '';  // for leaderboard entry
 
-function nightStars() { return puzzlesSolved + Math.floor(memCollected / 50); }
+function nightStars() { return puzzlesSolved + combosCompleted + Math.floor(memCollected / 50); }
 function runStars() { return totalStars + nightStars(); }
 
 // ─── LEADERBOARD ─────────────────────────────────────────
 // Set this to your API endpoint when deployed (e.g. 'https://games.voidtalker.com/api')
 // Leave empty to use localStorage only
-const LEADERBOARD_API = 'http://localhost:3777';
+const LEADERBOARD_API = 'https://voidtalker.com/games/api';
 
 let onlineScores = null; // cached from last fetch
 
@@ -623,13 +678,14 @@ function enterDream() {
   const cx = Math.floor(np.GRID_W / 2), cy = Math.floor(np.GRID_H / 2);
   player.x = cx; player.y = cy;
   player.px = cx * CFG.TILE; player.py = cy * CFG.TILE;
-  player.moving = false;
+  smoothCamX = player.px + CFG.TILE/2; smoothCamY = player.py + CFG.TILE/2; camInited = true;
+  player.moveCooldown = 0;
   waveRadius = 5;
   visited = [];
   for (let y = 0; y < np.GRID_H; y++) { visited[y] = []; for (let x = 0; x < np.GRID_W; x++) visited[y][x] = false; }
   visited[cy][cx] = true;
   dreamTimer = 0; sleepTimer = 0;
-  memCollected = 0; puzzlesSolved = 0;
+  memCollected = 0; puzzlesSolved = 0; combosCompleted = 0;
   flashText = ''; flashTimer = 0;
   alarmPlayed = false; gameTime = 0;
   particles = [];
@@ -696,11 +752,11 @@ window.addEventListener('keydown', e => {
   if (state === 'title' && (e.code === 'Space' || e.code === 'Enter')) startGame();
   if (state === 'escaped' && resultTimer > 2 && (e.code === 'Space' || e.code === 'Enter')) {
     totalStars += nightStars();
-    totalMemories += memCollected; totalPuzzles += puzzlesSolved; night++; enterDream();
+    totalMemories += memCollected; totalPuzzles += puzzlesSolved + combosCompleted; night++; enterDream();
   }
   if (state === 'lost' && resultTimer > 1.5 && (e.code === 'Space' || e.code === 'Enter')) {
     totalStars += nightStars();
-    totalMemories += memCollected; totalPuzzles += puzzlesSolved;
+    totalMemories += memCollected; totalPuzzles += puzzlesSolved + combosCompleted;
     initials = ''; state = 'enterInitials';
   }
   if (state === 'enterInitials') {
@@ -717,15 +773,17 @@ window.addEventListener('keydown', e => {
 window.addEventListener('keyup', e => { keys[e.code] = false; });
 
 function getInputDir() {
-  if (justPressed['ArrowUp']||justPressed['KeyW']) return [0,-1];
-  if (justPressed['ArrowDown']||justPressed['KeyS']) return [0,1];
-  if (justPressed['ArrowLeft']||justPressed['KeyA']) return [-1,0];
-  if (justPressed['ArrowRight']||justPressed['KeyD']) return [1,0];
-  if (keys['ArrowUp']||keys['KeyW']) return [0,-1];
-  if (keys['ArrowDown']||keys['KeyS']) return [0,1];
-  if (keys['ArrowLeft']||keys['KeyA']) return [-1,0];
-  if (keys['ArrowRight']||keys['KeyD']) return [1,0];
-  return null;
+  const up = keys['ArrowUp']||keys['KeyW'];
+  const down = keys['ArrowDown']||keys['KeyS'];
+  const left = keys['ArrowLeft']||keys['KeyA'];
+  const right = keys['ArrowRight']||keys['KeyD'];
+  let dx = 0, dy = 0;
+  if (up && !down) dy = -1;
+  if (down && !up) dy = 1;
+  if (left && !right) dx = -1;
+  if (right && !left) dx = 1;
+  if (dx === 0 && dy === 0) return null;
+  return [dx, dy];
 }
 function clearJustPressed() { for (const k in justPressed) delete justPressed[k]; }
 
@@ -748,10 +806,16 @@ function isPassable(x, y) {
 function blockAt(x, y) { return blocks.find(b => b.x === x && b.y === y); }
 
 function tryMove(dx, dy) {
-  if (player.moving) return false;
+  if (player.moveCooldown > 0) return false;
   const nx = player.x + dx, ny = player.y + dy;
+  // diagonal wall-clip check: both adjacent cardinal tiles must be passable
+  if (dx !== 0 && dy !== 0) {
+    if (!isPassable(player.x + dx, player.y) || !isPassable(player.x, player.y + dy)) return false;
+  }
   const blk = blockAt(nx, ny);
   if (blk) {
+    // only push blocks cardinally, not diagonally
+    if (dx !== 0 && dy !== 0) return false;
     const bx = nx + dx, by = ny + dy;
     if (isPassable(bx, by) && !blockAt(bx, by)) {
       blk.x = bx; blk.y = by;
@@ -760,8 +824,10 @@ function tryMove(dx, dy) {
     } else return false;
   }
   if (!isPassable(nx, ny)) return false;
-  player.dx = dx; player.dy = dy; player.moving = true; player.moveT = 0;
+  player.dx = dx; player.dy = dy; player.moveCooldown = CFG.MOVE_TIME;
   player.x = nx; player.y = ny; lastMoveDir = {x:dx,y:dy}; sndMove();
+  if (visited[ny]) visited[ny][nx] = true;
+  checkTileInteractions();
   return true;
 }
 
@@ -788,6 +854,43 @@ function checkTileInteractions() {
       }
     }
   }
+  // color-switch combos
+  for (const sw of switches) {
+    if (sw.completed) continue;
+    if (!sw.activated && player.x === sw.x && player.y === sw.y) {
+      sw.activated = true; sndSwitch();
+      showFlash('Switch activated! Follow the colors in order!');
+      spawnP((sw.x+0.5)*CFG.TILE,(sw.y+0.5)*CFG.TILE,12,'#ffffff',1,0.8);
+    }
+    if (sw.activated) {
+      const seq = sw.sequence;
+      // check if player is on any uncollected orb in the sequence
+      for (let j = 0; j < seq.length; j++) {
+        const orb = seq[j];
+        if (orb.collected || player.x !== orb.x || player.y !== orb.y) continue;
+        if (j === sw.comboIndex) {
+          // correct! collect it
+          orb.collected = true; sw.comboIndex++;
+          sndComboStep(j);
+          spawnP((orb.x+0.5)*CFG.TILE,(orb.y+0.5)*CFG.TILE,6,orb.color,0.8,0.5);
+          if (sw.comboIndex === seq.length) {
+            sw.completed = true; combosCompleted++;
+            showFlash('Combo complete — star earned!');
+            sndPuzzle();
+            for (const o of seq) spawnP((o.x+0.5)*CFG.TILE,(o.y+0.5)*CFG.TILE,8,'#ffd700',1.2,1);
+          }
+        } else {
+          // wrong order — reset all uncollected
+          sndComboBreak();
+          showFlash('Combo broken! Sequence reset.');
+          sw.comboIndex = 0;
+          for (const o of seq) o.collected = false;
+        }
+        break;
+      }
+    }
+  }
+
   if (state === 'waking' && extractZone && player.x === extractZone.x && player.y === extractZone.y) {
     state = 'escaped'; resultTimer = 0; sndVictory();
     spawnP((player.x+0.5)*CFG.TILE,(player.y+0.5)*CFG.TILE,40,'#ffd700',2,2);
@@ -800,19 +903,17 @@ function showFlash(text) { flashText = text; flashTimer = 2.5; }
 let lastTime = 0;
 
 function movePlayer(dt) {
-  if (!player.moving) { const dir = getInputDir(); if (dir) tryMove(dir[0], dir[1]); }
-  if (player.moving) {
-    player.moveT += dt;
-    const frac = Math.min(player.moveT / CFG.MOVE_TIME, 1);
-    const ease = frac < 0.5 ? 2*frac*frac : 1 - Math.pow(-2*frac+2, 2)/2;
-    player.px = (player.x - player.dx*(1-ease)) * CFG.TILE;
-    player.py = (player.y - player.dy*(1-ease)) * CFG.TILE;
-    if (frac >= 1) {
-      player.moving = false;
-      player.px = player.x * CFG.TILE; player.py = player.y * CFG.TILE;
-      if (visited[player.y]) visited[player.y][player.x] = true;
-      checkTileInteractions();
-    }
+  if (player.moveCooldown > 0) player.moveCooldown = Math.max(0, player.moveCooldown - dt);
+  const dir = getInputDir();
+  if (dir) tryMove(dir[0], dir[1]);
+  // smooth lerp toward logical position
+  const tx = player.x * CFG.TILE, ty = player.y * CFG.TILE;
+  const lerp = 1 - Math.exp(-CFG.MOVE_LERP * dt);
+  player.px += (tx - player.px) * lerp;
+  player.py += (ty - player.py) * lerp;
+  // snap when very close to avoid endless sub-pixel drift
+  if (Math.abs(player.px - tx) < 0.5 && Math.abs(player.py - ty) < 0.5) {
+    player.px = tx; player.py = ty;
   }
 }
 
@@ -820,6 +921,12 @@ function update(t) {
   if (state === 'paused') { lastTime = t; return; } // freeze time
   const dt = Math.min((t - lastTime) / 1000, 0.05);
   lastTime = t; gameTime += dt;
+  // smooth camera
+  const camTargetX = player.px + CFG.TILE/2, camTargetY = player.py + CFG.TILE/2;
+  if (!camInited) { smoothCamX = camTargetX; smoothCamY = camTargetY; camInited = true; }
+  const camSpeed = 1 - Math.exp(-10 * dt);
+  smoothCamX += (camTargetX - smoothCamX) * camSpeed;
+  smoothCamY += (camTargetY - smoothCamY) * camSpeed;
   if (screenShake > 0) screenShake = Math.max(0, screenShake - dt);
   if (flashTimer > 0) flashTimer -= dt;
   updateParticles(dt);
@@ -922,13 +1029,12 @@ function cbRgba(r, g, b, a) {
 
 function render(t) {
   ctx.fillStyle = CFG.BG; ctx.fillRect(0, 0, W, H);
-  const camX = player.px + CFG.TILE/2, camY = player.py + CFG.TILE/2;
   const doShake = screenShake > 0 && settings.shake;
   const shakeX = doShake ? (Math.random()-0.5)*8 : 0;
   const shakeY = doShake ? (Math.random()-0.5)*8 : 0;
 
   ctx.save();
-  ctx.translate(W/2 - camX + shakeX, H/2 - camY + shakeY);
+  ctx.translate(W/2 - smoothCamX + shakeX, H/2 - smoothCamY + shakeY);
 
   if (state === 'sleeping') { renderSleepTransition(t); ctx.restore(); renderSleepingOverlay(t); return; }
 
@@ -1026,6 +1132,59 @@ function render(t) {
     ctx.shadowBlur = 0;
   }
 
+  // draw switches and combo orbs
+  for (const sw of switches) {
+    const vis = getTileVisibility(sw.x, sw.y);
+    if (vis > 0 && !sw.activated) {
+      // draw switch as a pulsing diamond on the floor
+      const spx = sw.x*TS+TS/2, spy = sw.y*TS+TS/2;
+      const pulse = 0.6+0.4*Math.sin(t*0.004);
+      ctx.shadowColor = '#ffffff'; ctx.shadowBlur = 12*vis*pulse;
+      ctx.fillStyle = `rgba(255,255,255,${vis*0.5*pulse})`;
+      ctx.beginPath();
+      ctx.moveTo(spx, spy-8); ctx.lineTo(spx+8, spy);
+      ctx.lineTo(spx, spy+8); ctx.lineTo(spx-8, spy);
+      ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = `rgba(255,255,255,${vis*0.7})`; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.shadowBlur = 0;
+    }
+    if (!sw.activated) continue;
+    // draw sequence orbs with connecting line
+    const seq = sw.sequence;
+    // connecting line between uncollected orbs
+    ctx.beginPath();
+    let started = false;
+    for (let j = sw.comboIndex; j < seq.length; j++) {
+      const orb = seq[j];
+      const vis2 = getTileVisibility(orb.x, orb.y); if (vis2 <= 0) continue;
+      const ox = orb.x*TS+TS/2, oy = orb.y*TS+TS/2;
+      if (!started) { ctx.moveTo(ox, oy); started = true; } else ctx.lineTo(ox, oy);
+    }
+    ctx.strokeStyle = `rgba(255,255,255,0.08)`; ctx.lineWidth = 2; ctx.stroke();
+    // draw each orb
+    for (let j = 0; j < seq.length; j++) {
+      const orb = seq[j];
+      if (orb.collected) continue;
+      const dx2 = orb.x-player.x, dy2 = orb.y-player.y;
+      if (Math.abs(dx2) > tilesX+2 || Math.abs(dy2) > tilesY+2) continue;
+      const vis2 = getTileVisibility(orb.x, orb.y); if (vis2 <= 0) continue;
+      const ox = orb.x*TS+TS/2, oy = orb.y*TS+TS/2 + Math.sin(t*0.003+j)*2;
+      const isNext = j === sw.comboIndex;
+      const pulse2 = isNext ? 0.7+0.3*Math.sin(t*0.008) : 0.4+0.2*Math.sin(t*0.003+j*0.5);
+      const radius = isNext ? 6 : 4;
+      ctx.shadowColor = orb.color; ctx.shadowBlur = (isNext ? 16 : 8)*vis2*pulse2;
+      ctx.fillStyle = orb.color + hex(Math.floor(vis2*255*pulse2));
+      ctx.beginPath(); ctx.arc(ox, oy, radius, 0, Math.PI*2); ctx.fill();
+      ctx.shadowBlur = 0;
+      // number label
+      if (vis2 > 0.3) {
+        ctx.font = '600 9px Outfit, sans-serif'; ctx.textAlign = 'center';
+        ctx.fillStyle = `rgba(255,255,255,${vis2*(isNext?0.9:0.5)})`;
+        ctx.fillText(j+1, ox, oy-radius-3);
+      }
+    }
+  }
+
   // draw player
   {
     const px = player.px+TS/2, py = player.py+TS/2, bob = Math.sin(t*0.004)*2;
@@ -1035,7 +1194,8 @@ function render(t) {
     ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(px, py+bob, 5, 0, Math.PI*2); ctx.fill();
     ctx.fillStyle = 'rgba(200,220,255,0.5)'; ctx.beginPath();
     ctx.arc(px+lastMoveDir.x*4, py+lastMoveDir.y*4+bob, 2.5, 0, Math.PI*2); ctx.fill();
-    if (player.moving && Math.random()<0.4) spawnP(px-lastMoveDir.x*6, py-lastMoveDir.y*6+bob, 1, '#8899cc', 0.3, 0.5);
+    const isMoving = Math.abs(player.px - player.x*CFG.TILE) > 1 || Math.abs(player.py - player.y*CFG.TILE) > 1;
+    if (isMoving && Math.random()<0.4) spawnP(px-lastMoveDir.x*6, py-lastMoveDir.y*6+bob, 1, '#8899cc', 0.3, 0.5);
   }
 
   // particles
@@ -1109,13 +1269,18 @@ function renderHUD(t) {
 
   ctx.textAlign = 'left'; ctx.font = '400 16px Outfit, sans-serif';
   ctx.fillStyle = '#8888aa'; ctx.fillText(`Memories: ${memCollected}`, 20, 30);
+  let hudY = 52;
   if (targets.length > 0) {
-    ctx.fillStyle = '#6a8a6a'; ctx.fillText(`Puzzles: ${puzzlesSolved} / ${targets.length}`, 20, 52);
+    ctx.fillStyle = '#6a8a6a'; ctx.fillText(`Puzzles: ${puzzlesSolved} / ${targets.length}`, 20, hudY); hudY += 22;
+  }
+  const totalCombos = switches.length;
+  if (totalCombos > 0) {
+    ctx.fillStyle = '#aa6688'; ctx.fillText(`Combos: ${combosCompleted} / ${totalCombos}`, 20, hudY); hudY += 22;
   }
   // stars earned this night
   const ns = nightStars();
   if (ns > 0) {
-    ctx.fillStyle = '#bba030'; ctx.fillText(`Stars: ${ns}`, 20, targets.length > 0 ? 74 : 52);
+    ctx.fillStyle = '#bba030'; ctx.fillText(`Stars: ${ns}`, 20, hudY);
   }
 
   // dream depth meter
@@ -1257,7 +1422,7 @@ function renderPause(t) {
     // run stats
     ctx.font = '300 13px Outfit, sans-serif'; ctx.fillStyle = '#6666aa';
     const rs = totalStars + nightStars();
-    ctx.fillText(`Night ${night+1}  ·  ${memCollected} memories  ·  ${puzzlesSolved} puzzles  ·  ${rs} stars`, W/2, H/2 - 100);
+    ctx.fillText(`Night ${night+1}  ·  ${memCollected} memories  ·  ${puzzlesSolved} puzzles  ·  ${combosCompleted} combos  ·  ${rs} stars`, W/2, H/2 - 100);
 
     PAUSE_MAIN.forEach((item, i) => {
       const sel = i === pauseSel;
@@ -1302,15 +1467,17 @@ function renderPause(t) {
     ctx.font = '600 28px Outfit, sans-serif'; ctx.fillStyle = '#c8c0e0';
     ctx.fillText('How to Play', W/2, H/2 - 150);
     const lines = [
-      ['Move', 'Arrow keys or WASD'],
+      ['Move', 'Arrow keys or WASD (diagonals supported)'],
       ['Pause', 'Escape'],
       ['', ''],
       ['Explore', 'The dream wave expands outward — explore the frontier'],
       ['Collect', 'Walk over glowing orbs to gather memories'],
       ['Puzzles', 'Push blocks onto green target circles'],
+      ['Switches', 'Step on white diamonds to reveal color combos'],
+      ['Combos', 'Follow the numbered colors in order for a star'],
       ['Extract', 'Stand on the gold diamond to speed up the timer'],
       ['', ''],
-      ['Stars', '1 star per puzzle  ·  1 star per 50 memories'],
+      ['Stars', '1 star per puzzle / combo  ·  1 star per 50 memories'],
       ['Wake', 'When the timer fills, the dream collapses inward'],
       ['Survive', 'Race to the extraction point before it dissolves!'],
     ];
@@ -1356,27 +1523,41 @@ function drawSlider(val) {
 }
 
 // ─── RESULT SCREENS ──────────────────────────────────────
-const WISDOMS = [
-  "The dream slipped away before I could grasp it...",
-  "Something flickered... was it a door? Or a window?",
-  "It came to me in a dream!\nEverything is connected somehow...",
-  "It came to me in a dream!\nEvery obstacle is just a puzzle\nwaiting to be seen from the right angle.",
-  "It came to me in a dream!\nThe pieces were always there.\nI just needed to dream them together.",
-  "It came to me in a dream!\nWhat we forget while waking\nthe sleeping mind remembers.",
-  "It came to me in a dream!\nThe deeper you go\nthe more the pieces fit.",
-  "It came to me in a dream!\nThe connections we overlook while awake\nare the bridges we build while we sleep.",
-  "It came to me in a dream!\nEvery night is a door.\nBehind each one — another self, waiting.",
-];
+const WISDOMS = {
+  restless: [
+    "A restless sleep...\nThe dream slipped away before I could grasp it.",
+    "A restless sleep...\nSomething flickered... was it a door? Or a window?",
+    "A restless sleep...\nI tossed and turned, but nothing took shape.",
+    "A restless sleep...\nThe night offered nothing but shadows.",
+  ],
+  dream: [
+    "It came to me in a dream!\nEverything is connected somehow...",
+    "It came to me in a dream!\nEvery obstacle is just a puzzle\nwaiting to be seen from the right angle.",
+    "It came to me in a dream!\nThe pieces were always there.\nI just needed to dream them together.",
+    "It came to me in a dream!\nWhat we forget while waking\nthe sleeping mind remembers.",
+  ],
+  breakthrough: [
+    "A breakthrough!\nThe deeper you go\nthe more the pieces fit.",
+    "A breakthrough!\nThe connections we overlook while awake\nare the bridges we build while we sleep.",
+    "A breakthrough!\nEvery night is a door.\nBehind each one — another self, waiting.",
+    "A breakthrough!\nThe fog parted and for a moment\nI saw the whole pattern at once.",
+  ],
+  epiphany: [
+    "An epiphany!\nThe dream opened like a book\nand every page was written in light.",
+    "An epiphany!\nI held the entire world in my mind\nand it all made perfect sense.",
+    "An epiphany!\nThe boundaries dissolved —\nI was the dream and the dreamer both.",
+    "An epiphany!\nFor one shining moment\nI understood everything.",
+  ],
+};
 
 function getWisdom() {
-  // scale with memories: 0-5 → low, 5-20 → mid, 20+ → high
-  const score = memCollected + puzzlesSolved * 5;
-  if (score < 3) return WISDOMS[0];
-  if (score < 8) return WISDOMS[1];
-  if (score < 15) return WISDOMS[2];
-  if (score < 25) return WISDOMS[3 + (night % 3)];
-  if (score < 40) return WISDOMS[5 + (night % 2)];
-  return WISDOMS[7 + (night % 2)];
+  const stars = nightStars();
+  let pool;
+  if (stars === 0) pool = WISDOMS.restless;
+  else if (stars <= 3) pool = WISDOMS.dream;
+  else if (stars === 4) pool = WISDOMS.breakthrough;
+  else pool = WISDOMS.epiphany;
+  return pool[night % pool.length];
 }
 
 function drawStarsRow(cx, cy, count, maxShow, t, ease) {
@@ -1427,7 +1608,7 @@ function renderResult(t) {
       const ta2 = Math.min(1, (resultTimer - 1.5) * 1.5);
       const lines = getWisdom().split('\n');
       lines.forEach((line, i) => {
-        if (i === 0 && line.startsWith('It came')) { ctx.font = '600 22px Outfit, sans-serif'; ctx.fillStyle = `rgba(255,230,180,${ta2*ease})`; }
+        if (i === 0) { ctx.font = '600 22px Outfit, sans-serif'; ctx.fillStyle = `rgba(255,230,180,${ta2*ease})`; }
         else { ctx.font = '300 18px Outfit, sans-serif'; ctx.fillStyle = `rgba(200,195,220,${ta2*ease})`; }
         ctx.fillText(line, W / 2, charY + 85 + i * 28);
       });
@@ -1435,7 +1616,7 @@ function renderResult(t) {
     if (resultTimer > 2.2) {
       const ma = Math.min(1, (resultTimer - 2.2) * 1.5);
       ctx.font = '300 14px Outfit, sans-serif'; ctx.fillStyle = `rgba(140,140,170,${ma*ease})`;
-      ctx.fillText(`Night ${night+1}  ·  ${memCollected} memories  ·  ${puzzlesSolved} puzzles  ·  ${ns} stars`, W/2, H/2+125);
+      ctx.fillText(`Night ${night+1}  ·  ${memCollected} memories  ·  ${puzzlesSolved} puzzles  ·  ${combosCompleted} combos  ·  ${ns} stars`, W/2, H/2+125);
       if (totalStars > 0) {
         ctx.fillStyle = `rgba(255,215,0,${ma*ease*0.5})`;
         ctx.fillText(`Run total: ${totalStars + ns} stars across ${night+1} nights`, W/2, H/2+147);
@@ -1564,7 +1745,7 @@ function renderTitle(t) {
   ctx.fillText('The dream expands — explore outward, collect memories, solve puzzles', W/2, iy);
   ctx.fillText('Stand on the extraction point to speed up the dream', W/2, iy+22);
   ctx.fillText('When you wake, race to extraction before the dream collapses', W/2, iy+44);
-  ctx.fillText('Arrow keys / WASD to move  ·  Push blocks onto glowing targets', W/2, iy+72);
+  ctx.fillText('Arrow keys / WASD to move  ·  Push blocks  ·  Follow color combos', W/2, iy+72);
   ctx.font='400 18px Outfit, sans-serif';
   ctx.fillStyle=`rgba(180,175,210,${0.5+0.3*Math.sin(t*0.004)})`;
   ctx.fillText('press space to sleep', W/2, iy+115);
