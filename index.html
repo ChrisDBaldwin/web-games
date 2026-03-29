@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Arcade — voidtalker.com</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400&family=Libre+Caslon+Display&family=Instrument+Serif:ital@1&family=JetBrains+Mono:wght@300;400&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0c0c10;
+    --bg-surface: #16151b;
+    --border-subtle: rgba(200, 185, 155, 0.06);
+    --border-hover: rgba(200, 185, 155, 0.14);
+    --text: #e0dcd0;
+    --text-secondary: #b0ab9c;
+    --text-tertiary: #7a756a;
+    --warm: #c9a555;
+    --warm-soft: #a8904d;
+    --teal: #6aad9e;
+    --teal-soft: rgba(106, 173, 158, 0.12);
+    --slate: #8b8aad;
+    --slate-soft: rgba(139, 138, 173, 0.10);
+    --ember: #c47a5a;
+    --warm-glow: rgba(201, 165, 85, 0.08);
+    --font-display: 'Libre Caslon Display', Georgia, serif;
+    --font-accent: 'Instrument Serif', Georgia, serif;
+    --font-body: 'Fraunces', Georgia, serif;
+    --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+    --ease-smooth: cubic-bezier(0.25, 1, 0.5, 1);
+  }
+
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  /* Site nav */
+  .site-nav {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1.2rem clamp(1.5rem, 4vw, 3rem);
+    background: rgba(12, 12, 16, 0.85);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .site-nav-logo {
+    font-family: var(--font-display);
+    font-size: 1.4rem;
+    font-weight: 400;
+    color: var(--text);
+    text-decoration: none;
+    transition: color 0.25s;
+  }
+  .site-nav-logo:hover { color: var(--warm); }
+
+  .site-nav-links {
+    display: flex;
+    gap: 2rem;
+    list-style: none;
+  }
+
+  .site-nav-links a {
+    font-family: var(--font-body);
+    font-size: 1.4rem;
+    font-weight: 300;
+    color: var(--text-secondary);
+    text-decoration: none;
+    transition: color 0.25s;
+  }
+  .site-nav-links a:hover { color: var(--warm); }
+  .site-nav-links .current a { color: var(--warm); }
+
+  body {
+    background:
+      url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.018'/%3E%3C/svg%3E"),
+      var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    font-weight: 300;
+    line-height: 1.72;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background:
+      radial-gradient(ellipse at 20% 40%, rgba(139, 138, 173, 0.025) 0%, transparent 55%),
+      radial-gradient(ellipse at 80% 70%, rgba(106, 173, 158, 0.02) 0%, transparent 50%),
+      radial-gradient(ellipse at 50% 10%, rgba(201, 165, 85, 0.015) 0%, transparent 45%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .page {
+    display: grid;
+    grid-template-columns: 1fr min(72ch, 90%) 1fr;
+    position: relative;
+    z-index: 1;
+  }
+  .page > * { grid-column: 2; }
+
+  /* Header */
+  header {
+    padding: clamp(4.8rem, 3.2rem + 4vw, 8rem) 0 clamp(2.8rem, 2.08rem + 2vw, 4.4rem);
+  }
+
+  .site-label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 400;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    color: var(--warm-soft);
+    margin-bottom: clamp(2.8rem, 2.08rem + 2vw, 4.4rem);
+    opacity: 0;
+    animation: fadeUp 0.7s var(--ease-out) 0.15s both;
+  }
+
+  h1 {
+    font-family: var(--font-display);
+    font-size: clamp(3.04rem, 2.24rem + 2vw, 4.64rem);
+    font-weight: 400;
+    line-height: 1.18;
+    letter-spacing: -0.01em;
+    margin-bottom: clamp(0.8rem, 0.64rem + 0.4vw, 1.2rem);
+    opacity: 0;
+    animation: fadeUp 0.7s var(--ease-out) 0.3s both;
+  }
+
+  h1 em {
+    font-style: italic;
+    color: var(--warm);
+    font-family: var(--font-accent);
+  }
+
+  .intro {
+    font-size: clamp(1.44rem, 1.36rem + 0.2vw, 1.6rem);
+    color: var(--text-secondary);
+    max-width: 52ch;
+    line-height: 1.75;
+    opacity: 0;
+    animation: fadeUp 0.7s var(--ease-out) 0.5s both;
+  }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .divider {
+    height: 1px;
+    background: linear-gradient(to right, transparent, var(--border-hover), transparent);
+  }
+
+  /* Game cards */
+  .games {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: clamp(1.6rem, 1.36rem + 0.7vw, 2.24rem);
+    padding: clamp(4.8rem, 3.2rem + 4vw, 8rem) 0;
+  }
+
+  @media (max-width: 640px) { .games { grid-template-columns: 1fr; } }
+
+  a.card {
+    display: block;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: 5px;
+    padding: clamp(2.8rem, 2.08rem + 2vw, 4.4rem);
+    text-decoration: none;
+    color: inherit;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(0, 0, 0, 0.1);
+    transition: border-color 0.4s, box-shadow 0.4s, transform 0.35s var(--ease-smooth);
+    opacity: 0;
+    animation: fadeUp 0.6s var(--ease-out) both;
+  }
+  a.card:nth-child(1) { animation-delay: 0.1s; }
+  a.card:nth-child(2) { animation-delay: 0.15s; }
+  a.card:nth-child(3) { animation-delay: 0.2s; }
+  a.card:nth-child(4) { animation-delay: 0.25s; }
+  a.card:nth-child(5) { animation-delay: 0.3s; }
+  a.card:nth-child(6) { animation-delay: 0.35s; }
+
+  a.card:hover {
+    border-color: var(--border-hover);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(0, 0, 0, 0.12);
+    transform: translateY(-2px);
+  }
+
+  .card h2 {
+    font-family: var(--font-display);
+    font-size: clamp(2rem, 1.76rem + 0.5vw, 2.4rem);
+    font-weight: 400;
+    margin-bottom: 0.32rem;
+  }
+
+  .tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: clamp(0.8rem, 0.64rem + 0.4vw, 1.2rem);
+  }
+
+  .tag {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    padding: 2px 7px;
+    border-radius: 3px;
+    color: var(--teal);
+    background: var(--teal-soft);
+  }
+  .tag-input { color: var(--slate); background: var(--slate-soft); }
+  .tag-mp { color: var(--ember); background: rgba(196, 122, 90, 0.12); }
+  .tag-lb { color: var(--warm); background: var(--warm-glow); }
+
+  .card p {
+    color: var(--text-secondary);
+    font-size: clamp(1.44rem, 1.36rem + 0.2vw, 1.6rem);
+    line-height: 1.65;
+  }
+
+  /* Footer */
+  footer {
+    padding: clamp(2.8rem, 2.08rem + 2vw, 4.4rem) 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-tertiary);
+    letter-spacing: 0.5px;
+  }
+
+  footer a {
+    color: var(--text-tertiary);
+    text-decoration: none;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    transition: color 0.25s;
+  }
+  footer a:hover { color: var(--warm); }
+
+  footer svg {
+    width: 18px;
+    height: 18px;
+    fill: currentColor;
+  }
+</style>
+</head>
+<body>
+<nav class="site-nav">
+  <a class="site-nav-logo" href="https://voidtalker.com">Voidtalker</a>
+  <ul class="site-nav-links">
+    <li><a href="https://voidtalker.com/">Home</a></li>
+    <li><a href="https://voidtalker.com/about/">About</a></li>
+    <li><a href="https://voidtalker.com/musings/">Musings</a></li>
+    <li class="current"><a href="/games">Arcade</a></li>
+  </ul>
+</nav>
+<div class="page">
+
+  <header>
+    <div class="site-label">voidtalker.com</div>
+    <h1>The <em>Arcade</em></h1>
+    <p class="intro">Vibe-coded whims. Each game is a single HTML file — no frameworks, no build steps, just canvas and curiosity.</p>
+  </header>
+
+  <div class="divider"></div>
+
+  <div class="games">
+    <a class="card" href="dream-logic.html">
+      <h2>Dream Logic</h2>
+      <div class="tags">
+        <span class="tag">roguelike</span>
+        <span class="tag tag-lb">leaderboard</span>
+      </div>
+      <p>Endless fog-of-war puzzle roguelike. Navigate procedural dreamscapes, collect memories, and climb the leaderboard.</p>
+    </a>
+
+    <a class="card" href="knot-equivalence.html">
+      <h2>Knot Equivalence</h2>
+      <div class="tags">
+        <span class="tag">webgl</span>
+        <span class="tag">math</span>
+      </div>
+      <p>3D knot identification game. Two knots shown side by side in random orientations — guess whether they're the same type.</p>
+    </a>
+
+    <a class="card" href="planning-joker.html">
+      <h2>Planning Joker</h2>
+      <div class="tags">
+        <span class="tag">cards</span>
+      </div>
+      <p>A card game with a planning twist.</p>
+    </a>
+
+    <a class="card" href="ram-butt.html">
+      <h2>Ram Butt</h2>
+      <div class="tags">
+        <span class="tag tag-mp">local multiplayer</span>
+      </div>
+      <p>A two-player game of stubbornness. Ram your opponent off the field in head-to-head combat.</p>
+    </a>
+
+    <a class="card" href="motion-storm.html">
+      <h2>Motion Storm</h2>
+      <div class="tags">
+        <span class="tag tag-input">webcam</span>
+      </div>
+      <p>Webcam-powered physics game. Your body movements create force fields that push balls around.</p>
+    </a>
+
+    <a class="card" href="snowball.html">
+      <h2>Snowball</h2>
+      <div class="tags">
+        <span class="tag">arcade</span>
+      </div>
+      <p>Snowball game.</p>
+    </a>
+  </div>
+
+  <div class="divider"></div>
+
+  <footer>
+    <span>voidtalker.com</span>
+    <a href="https://github.com/chrisdbaldwin/web-games" target="_blank" rel="noopener">
+      <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      Source
+    </a>
+  </footer>
+
+</div>
+</body>
+</html>

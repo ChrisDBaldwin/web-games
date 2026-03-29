@@ -23,10 +23,53 @@ let cameraX = 0;
 let cameraY = 0;
 let distance = 0;
 let bestDistance = 0;
+let initials = '';
+
+// ─── LEADERBOARD ─────────────────────────────────────────
+const LEADERBOARD_API = 'https://voidtalker.com/games/api';
+let onlineScores = null;
+
+function getLocalScores() { try { return JSON.parse(localStorage.getItem('snowballScores') || '[]'); } catch { return []; } }
+function saveLocalScore(ini, dist, size) {
+  const scores = getLocalScores();
+  scores.push({ ini, dist, size, date: Date.now() });
+  scores.sort((a, b) => b.dist - a.dist || b.size - a.size);
+  if (scores.length > 50) scores.length = 50;
+  localStorage.setItem('snowballScores', JSON.stringify(scores));
+}
+function getScores() {
+  const local = getLocalScores();
+  const online = (onlineScores || []).filter(s => s.dist != null);
+  if (online.length > 0) return online;
+  return local;
+}
+
+async function fetchScores() {
+  if (!LEADERBOARD_API) { onlineScores = null; return; }
+  try {
+    const res = await fetch(LEADERBOARD_API + '/scores?game=snowball');
+    if (res.ok) onlineScores = await res.json();
+  } catch { onlineScores = null; }
+}
+async function saveScore(ini, dist, size) {
+  saveLocalScore(ini, dist, size);
+  if (!LEADERBOARD_API) return;
+  try {
+    const res = await fetch(LEADERBOARD_API + '/scores?game=snowball', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ini, dist, size }),
+    });
+    if (res.ok) onlineScores = await res.json();
+  } catch { /* localStorage fallback already saved */ }
+}
+fetchScores();
 
 const SEGMENT_W = 6;
 const terrain = [];
 let terrainGenerated = 0;
+
+let ramps = []; // { x, width } — locations of jump ramps
 
 function generateTerrain(upToX) {
   while (terrainGenerated < upToX + canvas.width * 2) {
@@ -35,7 +78,7 @@ function generateTerrain(upToX) {
     const progress = x / 5000;
 
     // Strong consistent downhill slope that increases with progress
-    const baseSlope = 0.06 + progress * 0.03;
+    const baseSlope = 0.18 + progress * 0.05;
     const baseY = 200 + x * baseSlope;
 
     // Rolling bumps that NEVER create net uphills — only vary the steepness
@@ -47,7 +90,41 @@ function generateTerrain(upToX) {
     // Occasional steeper drops (fun fast sections)
     const dropZone = Math.max(0, Math.sin(x * 0.0015) - 0.6) * 80;
 
-    const y = baseY + wave1 + wave2 + bump - dropZone;
+    let y = baseY + wave1 + wave2 + bump - dropZone;
+
+    // Jump ramps — a lip that curves upward then drops off
+    // Place ramps every ~800-1400px, starting after 600px
+    const lastRampEnd = ramps.length > 0 ? ramps[ramps.length - 1].x + ramps[ramps.length - 1].ramp + ramps[ramps.length - 1].gap : 0;
+    if (x > 1500 && x > lastRampEnd + 500) {
+      const rampSeed = Math.sin(x * 0.00137 + 7.3) * 0.5 + 0.5;
+      if (rampSeed > 0.55) {
+        const rampW = 200 + Math.floor(rampSeed * 100);
+        const gapW = 120 + Math.floor(rampSeed * 80);
+        ramps.push({ x, ramp: rampW, gap: gapW });
+      }
+    }
+
+    // Apply ramp shape: long gradual upslope, then a gap/chasm
+    for (const r of ramps) {
+      const rx = x - r.x;
+      const totalW = r.ramp + r.gap;
+      if (rx < 0 || rx > totalW) continue;
+      const rampHeight = 15 + progress * 5;
+      if (rx <= r.ramp) {
+        // Upslope: very gentle curve, barely noticeable until the lip
+        const t = rx / r.ramp;
+        const rise = Math.pow(t, 2.5) * rampHeight;
+        y -= rise;
+      } else {
+        // Gap: terrain drops away steeply
+        const gt = (rx - r.ramp) / r.gap;
+        // Start at lip height, plunge down
+        const lipHeight = rampHeight;
+        const drop = lipHeight + gt * rampHeight * 2.5;
+        y += drop - lipHeight;
+      }
+    }
+
     terrain.push({ x, y: Math.min(y, 3000) });
     terrainGenerated = x;
   }
@@ -85,10 +162,15 @@ function generateSnow(upToX) {
 
 const ball = {
   x: 80, y: 200, vx: 0, vy: 0, radius: 12, mass: 1,
-  onGround: false, angularPos: 0, trail: []
+  onGround: false, angularPos: 0, trail: [],
+  airFromRamp: false, airTime: 0
 };
 
 let particles = [];
+let landingMsg = '', landingMsgTimer = 0;
+
+// Avalanche — chases from the left
+const avalanche = { x: -200, speed: 0, baseSpeed: 2.5 };
 
 function spawnParticles(x, y, count, color) {
   for (let i = 0; i < count; i++) {
@@ -103,8 +185,21 @@ function spawnParticles(x, y, count, color) {
 const keys = {};
 window.addEventListener('keydown', e => {
   keys[e.code] = true;
-  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
-  if ((state === 'title' || state === 'gameover') && (e.code === 'Space' || e.code === 'Enter')) startGame();
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','Backspace'].includes(e.code)) e.preventDefault();
+  if ((state === 'title') && (e.code === 'Space' || e.code === 'Enter')) startGame();
+  if (state === 'gameover' && (e.code === 'Space' || e.code === 'Enter')) {
+    initials = ''; state = 'enterInitials';
+  }
+  if (state === 'enterInitials') {
+    if (e.code === 'Backspace' && initials.length > 0) initials = initials.slice(0, -1);
+    else if ((e.code === 'Enter' || e.code === 'Space') && initials.length > 0) {
+      saveScore(initials.toUpperCase(), distance, Math.round(ball.radius * 10) / 10);
+      fetchScores(); state = 'title';
+    }
+    else if (e.key.length === 1 && /[a-zA-Z]/.test(e.key) && initials.length < 3) {
+      initials += e.key.toUpperCase();
+    }
+  }
 });
 window.addEventListener('keyup', e => { keys[e.code] = false; });
 
@@ -112,21 +207,24 @@ function startGame() {
   state = 'playing';
   terrain.length = 0;
   terrainGenerated = 0;
+  ramps = [];
   snowPatches = [];
   snowGenerated = 0;
   particles = [];
   cameraX = 0;
   cameraY = 0;
   distance = 0;
+  landingMsg = ''; landingMsgTimer = 0;
+  avalanche.x = -300; avalanche.speed = 0;
   ball.x = 80; ball.y = 100; ball.vx = 1; ball.vy = 0;
   ball.radius = 12; ball.mass = 1; ball.onGround = false; ball.trail = [];
+  ball.airFromRamp = false; ball.airTime = 0;
   generateTerrain(canvas.width * 3);
   generateSnow(canvas.width * 3);
 }
 
 const GRAVITY = 0.4;
 const FRICTION = 0.992;
-let stuckTimer = 0;
 
 function updateBall() {
   const angle = getTerrainAngle(ball.x);
@@ -145,23 +243,20 @@ function updateBall() {
     const slopeForce = Math.sin(angle) * GRAVITY * 2.8;
     ball.vx += slopeForce * (1 + ball.mass * 0.08);
 
-    // Lean forward: small push + less friction (shift weight downhill)
-    if (leanRight) {
-      ball.vx += 0.15 * (1 + ball.mass * 0.02);
+    // Lean forward: only on meaningful downhill slopes
+    const slopeDown = Math.sin(angle);
+    if (leanRight && slopeDown > 0.08) {
+      ball.vx += 0.1 * slopeDown * (1 + ball.mass * 0.02);
     }
     // Lean back: gentle braking
     if (leanLeft) {
       ball.vx *= 0.97;
     }
 
-    // Tuck: reduce friction significantly (crouch for speed)
-    const frictionMul = tucking ? 0.999 : FRICTION;
+    // Friction: stronger on flat ground, lighter on steep slopes
+    const flatness = 1 - Math.min(1, Math.abs(slopeDown) * 5);
+    const frictionMul = FRICTION - flatness * 0.01;
     ball.vx *= frictionMul;
-
-    // Minimum speed nudge — gravity should always win on a downhill
-    if (ball.vx > 0 && ball.vx < 0.5 && Math.sin(angle) > 0.02) {
-      ball.vx += 0.05;
-    }
 
     ball.y = surfaceY;
     ball.vy = 0;
@@ -190,11 +285,46 @@ function updateBall() {
       const landAngle = getTerrainAngle(ball.x);
       // Convert vertical momentum into horizontal on landing
       ball.vx += ball.vy * Math.sin(landAngle) * 0.6;
+
+      // Ramp landing mechanic
+      if (ball.airFromRamp && ball.airTime > 10) {
+        if (tucking) {
+          // Perfect landing — gain snow
+          const bonus = 1.5 + ball.radius * 0.05;
+          ball.radius += bonus;
+          ball.mass += bonus * 0.3;
+          ball.vx *= 1.12;
+          spawnParticles(ball.x, ball.y + ball.radius, 15, '#aaeeff');
+          landingMsg = 'PERFECT LANDING! +snow';
+          landingMsgTimer = 60;
+        } else {
+          // Rough landing — lose snow
+          const penalty = 1 + ball.radius * 0.04;
+          ball.radius = Math.max(8, ball.radius - penalty);
+          ball.mass = Math.max(0.5, ball.mass - penalty * 0.3);
+          ball.vx *= 0.92;
+          spawnParticles(ball.x, ball.y + ball.radius, 10, '#ff8888');
+          landingMsg = 'ROUGH LANDING! -snow';
+          landingMsgTimer = 60;
+        }
+      }
+      ball.airFromRamp = false;
+      ball.airTime = 0;
     }
     ball.vy = 0;
     ball.onGround = true;
   } else {
+    // Track if we launched off a ramp
+    if (ball.onGround) {
+      for (const r of ramps) {
+        if (ball.x >= r.x + r.ramp * 0.5 && ball.x <= r.x + r.ramp + r.gap + 50) {
+          ball.airFromRamp = true;
+          break;
+        }
+      }
+    }
     ball.onGround = false;
+    ball.airTime++;
   }
 
   for (const patch of snowPatches) {
@@ -217,22 +347,27 @@ function updateBall() {
 
   distance = Math.max(distance, Math.floor(ball.x / 10));
 
-  // Game over: stuck with very low speed for too long
-  if (ball.vx < 0.1 && ball.onGround && ball.x > 200) {
-    stuckTimer++;
-    if (stuckTimer > 90) {
-      bestDistance = Math.max(bestDistance, distance);
-      state = 'gameover';
-      stuckTimer = 0;
-    }
-  } else {
-    stuckTimer = 0;
+  // Avalanche: accelerates over time, always creeping closer
+  const progress = ball.x / 5000;
+  avalanche.speed = avalanche.baseSpeed + progress * 3 + Math.max(0, ball.vx * 0.7);
+  // If ball is slow, avalanche gains ground faster
+  if (ball.vx < 2) avalanche.speed += 2;
+  avalanche.x += avalanche.speed;
+  // Never let it get too far behind (rubber band) or too far ahead
+  avalanche.x = Math.max(avalanche.x, ball.x - canvas.width * 1.2);
+
+  // Game over: avalanche catches the ball
+  if (avalanche.x >= ball.x - ball.radius && ball.x > 100) {
+    bestDistance = Math.max(bestDistance, distance);
+    state = 'gameover';
   }
 
-  const targetCamX = ball.x - canvas.width * 0.3;
+  if (landingMsgTimer > 0) landingMsgTimer--;
+
+  const targetCamX = ball.x - canvas.width * 0.25;
   cameraX += (targetCamX - cameraX) * 0.08;
 
-  const targetCamY = ball.y - canvas.height * 0.4;
+  const targetCamY = ball.y - canvas.height * 0.45;
   cameraY += (targetCamY - cameraY) * 0.08;
 }
 
@@ -325,6 +460,90 @@ function drawTerrain() {
       ctx[method](terrain[i].x - cameraX, terrain[i].y - cameraY + offset);
     }
     ctx.stroke();
+  }
+}
+
+function drawRampMarkers() {
+  for (const r of ramps) {
+    const sx = r.x - cameraX;
+    if (sx < -400 || sx > canvas.width + 200) continue;
+    // Arrow at the start of the ramp
+    const startX = r.x + r.ramp * 0.3;
+    const startY = getTerrainY(startX);
+    const asx = startX - cameraX, asy = startY - cameraY;
+    ctx.strokeStyle = 'rgba(170, 220, 255, 0.35)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(asx, asy - 16);
+    ctx.lineTo(asx - 5, asy - 10);
+    ctx.moveTo(asx, asy - 16);
+    ctx.lineTo(asx + 5, asy - 10);
+    ctx.stroke();
+    // Snow mound at lip
+    const lipX = r.x + r.ramp;
+    const lipY = getTerrainY(lipX);
+    const lsx = lipX - cameraX, lsy = lipY - cameraY;
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+    ctx.beginPath();
+    ctx.arc(lsx, lsy - 4, 8, Math.PI, 0);
+    ctx.fill();
+    // Danger stripes in the gap
+    const gapStart = lipX;
+    const gapEnd = r.x + r.ramp + r.gap;
+    ctx.strokeStyle = 'rgba(255, 100, 100, 0.15)';
+    ctx.lineWidth = 1;
+    for (let gx = gapStart; gx < gapEnd; gx += 20) {
+      const gy = getTerrainY(gx);
+      const gssx = gx - cameraX, gssy = gy - cameraY;
+      ctx.beginPath();
+      ctx.moveTo(gssx, gssy - 5);
+      ctx.lineTo(gssx + 10, gssy + 5);
+      ctx.stroke();
+    }
+  }
+}
+
+function drawAvalanche() {
+  if (state !== 'playing' && state !== 'gameover') return;
+  const ax = avalanche.x - cameraX;
+  // The avalanche is a massive wall of snow filling from the left edge
+  const wallX = ax; // right edge of the avalanche
+  if (wallX < -50) return;
+
+  const t = Date.now() * 0.001;
+
+  // Main snow cloud body — fills everything left of wallX
+  const grad = ctx.createLinearGradient(wallX - 300, 0, wallX + 40, 0);
+  grad.addColorStop(0, 'rgba(220, 225, 240, 0.95)');
+  grad.addColorStop(0.6, 'rgba(200, 210, 230, 0.8)');
+  grad.addColorStop(0.85, 'rgba(180, 195, 220, 0.5)');
+  grad.addColorStop(1, 'rgba(160, 180, 210, 0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(wallX - canvas.width * 2, 0, canvas.width * 2 + 40, canvas.height);
+
+  // Churning cloud billows at the leading edge
+  ctx.fillStyle = 'rgba(230, 235, 245, 0.7)';
+  for (let i = 0; i < 14; i++) {
+    const seed = i * 73.7;
+    const yBase = (seed * 3.1) % canvas.height;
+    const r = 25 + (seed % 35);
+    const wobbleX = Math.sin(t * 2.5 + seed) * 15;
+    const wobbleY = Math.sin(t * 1.8 + seed * 0.7) * 10;
+    ctx.beginPath();
+    ctx.arc(wallX + wobbleX - i * 5, yBase + wobbleY, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Smaller debris particles at the front
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+  for (let i = 0; i < 20; i++) {
+    const seed = i * 47.3;
+    const px = wallX + Math.sin(t * 3 + seed) * 30 + 10;
+    const py = (seed * 7.1) % canvas.height + Math.sin(t * 4 + seed * 0.5) * 8;
+    const pr = 2 + (seed % 4);
+    ctx.beginPath();
+    ctx.arc(px, py, pr, 0, Math.PI * 2);
+    ctx.fill();
   }
 }
 
@@ -431,6 +650,36 @@ function drawHUD() {
   const speedLabel = speed < 2 ? 'crawling...' : speed < 5 ? 'rolling' : speed < 10 ? 'cruising' : speed < 15 ? 'FAST' : 'BLAZING';
   ctx.fillStyle = speed < 2 ? '#ff6666' : '#a8a8c0';
   ctx.fillText(speedLabel, 20, 78);
+
+  // Avalanche proximity warning
+  const gap = ball.x - avalanche.x;
+  if (gap < canvas.width * 0.5) {
+    const danger = 1 - gap / (canvas.width * 0.5);
+    const pulse = 0.5 + Math.sin(Date.now() * 0.008 * (1 + danger * 2)) * 0.5;
+    ctx.fillStyle = `rgba(255, ${Math.floor(100 - danger * 80)}, ${Math.floor(100 - danger * 80)}, ${(0.4 + danger * 0.6) * pulse})`;
+    ctx.font = `bold ${14 + Math.floor(danger * 6)}px monospace`;
+    ctx.textAlign = 'left';
+    ctx.fillText('◀ AVALANCHE', 20, 100);
+  }
+
+  // Airborne ramp indicator
+  if (!ball.onGround && ball.airFromRamp && ball.airTime > 5) {
+    const pulse = 0.6 + Math.sin(Date.now() * 0.01) * 0.4;
+    ctx.textAlign = 'center';
+    ctx.font = '14px monospace';
+    ctx.fillStyle = `rgba(170, 238, 255, ${pulse})`;
+    ctx.fillText('↓ DUCK to land!', canvas.width / 2, 30);
+  }
+
+  // Landing message
+  if (landingMsgTimer > 0) {
+    const alpha = Math.min(1, landingMsgTimer / 30);
+    const isGood = landingMsg.includes('+');
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 18px monospace';
+    ctx.fillStyle = isGood ? `rgba(130, 230, 255, ${alpha})` : `rgba(255, 130, 130, ${alpha})`;
+    ctx.fillText(landingMsg, canvas.width / 2, canvas.height * 0.35);
+  }
 }
 
 const snowflakes = [];
@@ -468,17 +717,31 @@ function drawTitle() {
 
   ctx.font = '14px monospace';
   ctx.fillStyle = '#a8a8c0';
-  ctx.fillText('roll downhill. collect snow. get massive.', canvas.width / 2, canvas.height * 0.3 + 40);
-  ctx.fillText('the hills get steeper -- you gotta be big to keep up', canvas.width / 2, canvas.height * 0.3 + 62);
+  ctx.fillText('outrun the avalanche. collect snow. get massive.', canvas.width / 2, canvas.height * 0.3 + 40);
+  ctx.fillText('duck on ramp landings for a boost -- slow down and get buried', canvas.width / 2, canvas.height * 0.3 + 62);
 
   ctx.fillStyle = '#8888aa';
-  ctx.fillText('← lean back  |  → lean forward  |  ↓ tuck for speed', canvas.width / 2, canvas.height * 0.3 + 100);
+  ctx.fillText('← lean back  |  → lean forward  |  ↓ tuck / land jumps', canvas.width / 2, canvas.height * 0.3 + 100);
   ctx.fillText('(or A / D / S)', canvas.width / 2, canvas.height * 0.3 + 120);
 
   const pulse = 0.5 + Math.sin(Date.now() * 0.003) * 0.3;
   ctx.fillStyle = `rgba(232, 232, 240, ${pulse})`;
   ctx.font = '16px monospace';
   ctx.fillText('press SPACE to roll', canvas.width / 2, canvas.height * 0.3 + 160);
+
+  // leaderboard on title
+  const scores = getScores();
+  if (scores.length > 0) {
+    const ly = canvas.height * 0.3 + 195;
+    const lbl = (LEADERBOARD_API && onlineScores) ? 'LEADERBOARD · online' : 'LEADERBOARD · local';
+    ctx.font = '12px monospace'; ctx.fillStyle = '#555575';
+    ctx.fillText(lbl, canvas.width / 2, ly);
+    scores.slice(0, 5).forEach((s, i) => {
+      ctx.fillStyle = i === 0 ? '#8888aa' : '#555575';
+      ctx.font = '12px monospace';
+      ctx.fillText(`${i + 1}. ${s.ini || '???'}  —  ${s.dist ?? '?'}m  ·  size ${s.size ?? '?'}`, canvas.width / 2, ly + 18 + i * 17);
+    });
+  }
 }
 
 function drawGameOver() {
@@ -488,18 +751,61 @@ function drawGameOver() {
   ctx.fillStyle = '#e8e8f0';
   ctx.font = 'bold 28px monospace';
   ctx.textAlign = 'center';
-  const msg = ball.radius > 50 ? 'MASSIVE.' : ball.radius > 30 ? 'not bad!' : 'too smol...';
-  ctx.fillText(msg, canvas.width / 2, canvas.height * 0.35);
+  ctx.fillText('BURIED!', canvas.width / 2, canvas.height * 0.3);
 
   ctx.font = '16px monospace';
   ctx.fillStyle = '#a8a8c0';
-  ctx.fillText(`distance: ${distance}m`, canvas.width / 2, canvas.height * 0.35 + 40);
-  ctx.fillText(`best: ${bestDistance}m`, canvas.width / 2, canvas.height * 0.35 + 65);
-  ctx.fillText(`final size: ${ball.radius.toFixed(1)}`, canvas.width / 2, canvas.height * 0.35 + 90);
+  ctx.fillText(`distance: ${distance}m`, canvas.width / 2, canvas.height * 0.3 + 35);
+  ctx.fillText(`best: ${bestDistance}m`, canvas.width / 2, canvas.height * 0.3 + 58);
+  ctx.fillText(`final size: ${ball.radius.toFixed(1)}`, canvas.width / 2, canvas.height * 0.3 + 81);
 
   const pulse = 0.5 + Math.sin(Date.now() * 0.003) * 0.3;
   ctx.fillStyle = `rgba(232, 232, 240, ${pulse})`;
-  ctx.fillText('press SPACE to retry', canvas.width / 2, canvas.height * 0.35 + 140);
+  ctx.fillText('press SPACE to continue', canvas.width / 2, canvas.height * 0.3 + 120);
+}
+
+function drawEnterInitials() {
+  ctx.fillStyle = 'rgba(15, 15, 35, 0.8)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.textAlign = 'center';
+
+  ctx.fillStyle = '#e8e8f0';
+  ctx.font = 'bold 22px monospace';
+  ctx.fillText(`${distance}m  ·  size ${ball.radius.toFixed(1)}`, canvas.width / 2, canvas.height * 0.25);
+
+  ctx.font = '16px monospace';
+  ctx.fillStyle = '#a8a8c0';
+  ctx.fillText('enter your initials', canvas.width / 2, canvas.height * 0.25 + 40);
+
+  // initials display
+  const letters = initials.padEnd(3, '_');
+  ctx.font = 'bold 36px monospace';
+  const spacing = 40;
+  const startX = canvas.width / 2 - spacing;
+  for (let i = 0; i < 3; i++) {
+    const ch = letters[i];
+    const isCursor = i === initials.length && ch === '_';
+    const blink = isCursor ? (Math.sin(Date.now() * 0.006) > 0 ? 1 : 0.3) : 1;
+    ctx.fillStyle = ch === '_' ? `rgba(100,100,140,${blink})` : `rgba(232,232,240,${blink})`;
+    ctx.fillText(ch, startX + i * spacing, canvas.height * 0.25 + 90);
+  }
+
+  ctx.font = '12px monospace';
+  ctx.fillStyle = '#666688';
+  ctx.fillText('type 1-3 letters, then press enter', canvas.width / 2, canvas.height * 0.25 + 120);
+
+  // leaderboard preview
+  const scores = getScores();
+  if (scores.length > 0) {
+    const ly = canvas.height * 0.25 + 155;
+    ctx.font = '14px monospace'; ctx.fillStyle = '#555575';
+    ctx.fillText('HIGH SCORES', canvas.width / 2, ly);
+    scores.slice(0, 7).forEach((s, i) => {
+      ctx.fillStyle = i === 0 ? '#8888aa' : '#555575';
+      ctx.font = '12px monospace';
+      ctx.fillText(`${i + 1}. ${s.ini || '???'}  —  ${s.dist ?? '?'}m  ·  size ${s.size ?? '?'}`, canvas.width / 2, ly + 20 + i * 18);
+    });
+  }
 }
 
 function frame() {
@@ -512,12 +818,16 @@ function frame() {
 
   if (state === 'title') {
     drawTitle();
+  } else if (state === 'enterInitials') {
+    drawEnterInitials();
   } else {
     drawSky();
     drawMountains();
     drawTerrain();
+    drawRampMarkers();
     drawTrail();
     drawSnowPatches();
+    drawAvalanche();
     drawParticles();
     drawBall();
     drawSnowfall();
