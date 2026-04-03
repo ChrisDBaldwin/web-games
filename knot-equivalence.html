@@ -19,6 +19,8 @@ header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
   padding: 12px 24px;
   background: #161b22;
   border-bottom: 1px solid #30363d;
@@ -138,6 +140,12 @@ header h1 span { color: #58a6ff; }
 }
 .feedback.correct-feedback { color: #3fb950; }
 .feedback.wrong-feedback { color: #f85149; }
+.mode-hint {
+  font-size: 0.8em;
+  color: #6e7681;
+  margin-bottom: 6px;
+  font-style: italic;
+}
 .streak {
   position: absolute;
   top: 8px;
@@ -165,6 +173,11 @@ header h1 span { color: #58a6ff; }
     <button class="active" id="btn3d" onclick="setViewMode('3d')">3D</button>
     <button id="btn2d" onclick="setViewMode('2d')">2D Diagram</button>
   </div>
+  <div class="view-toggle">
+    <button class="active" id="btnNormal" onclick="setDifficulty('normal')">Normal</button>
+    <button id="btnHard" onclick="setDifficulty('hard')">Hard</button>
+    <button id="btnImpossible" onclick="setDifficulty('impossible')">Impossible</button>
+  </div>
   <div class="score">
     <span class="correct" id="correctCount">0</span> /
     <span id="totalCount">0</span>
@@ -189,7 +202,8 @@ header h1 span { color: #58a6ff; }
 </div>
 
 <div class="bottom">
-  <div class="question">Are these the same type of knot?</div>
+  <div class="question" id="questionText">Are these the same type of knot?</div>
+  <div class="mode-hint" id="modeHint"></div>
   <div class="buttons">
     <button class="btn-yes" id="btnYes" onclick="answer(true)">YES</button>
     <button class="btn-no" id="btnNo" onclick="answer(false)">NO</button>
@@ -319,6 +333,15 @@ const KNOT_DEFS = [
     fact: 'The granny knot is the connected sum of two identical trefoil knots.'
   }
 ];
+
+const CHIRAL_KNOTS = new Set(['trefoil', 'cinquefoil', 'torus_3_4', 'torus_2_7', 'torus_3_5', 'granny']);
+
+function mirrorKnotFn(fn) {
+  return t => {
+    const [x, y, z] = fn(t);
+    return [-x, y, z];
+  };
+}
 
 // ─── Rotation Helpers ────────────────────────────────────────────
 function rotatePoint(p, angles) {
@@ -606,6 +629,7 @@ class KnotRenderer3D {
     this.autoRotSpeed = 0.4 + Math.random() * 0.3;
     this.color = [0.34, 0.65, 1.0];
     this.use32 = false;
+    this.interactionEnabled = true;
 
     this._setupDrag();
   }
@@ -613,6 +637,7 @@ class KnotRenderer3D {
   _setupDrag() {
     let dragging = false, lastX, lastY;
     this.canvas.addEventListener('pointerdown', e => {
+      if (!this.interactionEnabled) return;
       dragging = true;
       lastX = e.clientX; lastY = e.clientY;
       this.canvas.setPointerCapture(e.pointerId);
@@ -673,7 +698,7 @@ class KnotRenderer3D {
     gl.viewport(0, 0, w, h);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-    this.rotY += this.autoRotSpeed * dt;
+    if (this.interactionEnabled) this.rotY += this.autoRotSpeed * dt;
 
     const aspect = w / h;
     const proj = mat4Perspective(0.8, aspect, 0.1, 100);
@@ -730,16 +755,13 @@ function render2DKnot(canvas, knotFn, angles) {
     canvas.height = h;
   }
 
-  ctx.clearRect(0, 0, w, h);
-
-  // Parchment background
-  ctx.fillStyle = '#f5f0e8';
+  const N = 600;
+  const bgColor = '#f5f0e8';
+  ctx.fillStyle = bgColor;
   ctx.fillRect(0, 0, w, h);
 
-  const N = 500;
   const pts = [];
 
-  // Sample and rotate, project to 2D (drop z, keep for crossing detection)
   for (let i = 0; i < N; i++) {
     const t = i / N;
     const p = knotFn(t);
@@ -747,7 +769,6 @@ function render2DKnot(canvas, knotFn, angles) {
     pts.push({ x: r[0], y: r[1], z: r[2] });
   }
 
-  // Find bounding box for scaling
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for (const p of pts) {
     if (p.x < minX) minX = p.x;
@@ -758,115 +779,530 @@ function render2DKnot(canvas, knotFn, angles) {
 
   const rangeX = maxX - minX || 1;
   const rangeY = maxY - minY || 1;
-  const margin = 40 * dpr;
+  const margin = 50 * dpr;
   const scaleX = (w - 2 * margin) / rangeX;
   const scaleY = (h - 2 * margin) / rangeY;
   const scale = Math.min(scaleX, scaleY);
   const cx = w / 2, cy = h / 2;
   const midX = (minX + maxX) / 2, midY = (minY + maxY) / 2;
 
-  function toScreen(p) {
-    return {
-      x: cx + (p.x - midX) * scale,
-      y: cy + (p.y - midY) * scale
-    };
-  }
+  const screenPts = pts.map(p => ({
+    x: cx + (p.x - midX) * scale,
+    y: cy + (p.y - midY) * scale
+  }));
 
   // Find crossings
-  const gapSegments = new Set();
-  const GAP_RADIUS = 4; // how many segments to gap on each side
-
+  const crossings = [];
   for (let i = 0; i < N; i++) {
     const i2 = (i + 1) % N;
-    const p1 = toScreen(pts[i]), p2 = toScreen(pts[i2]);
-
     for (let j = i + 3; j < N; j++) {
-      // Skip segments too close in parameter space (adjacent)
       if ((j + 1) % N === i || j === i) continue;
       const j2 = (j + 1) % N;
-      const p3 = toScreen(pts[j]), p4 = toScreen(pts[j2]);
-
-      const inter = segmentIntersection(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y, p4.x, p4.y);
+      const inter = segmentIntersection(
+        screenPts[i].x, screenPts[i].y, screenPts[i2].x, screenPts[i2].y,
+        screenPts[j].x, screenPts[j].y, screenPts[j2].x, screenPts[j2].y
+      );
       if (inter) {
-        // Interpolate z to find over/under
         const z_i = pts[i].z + inter.t * (pts[i2].z - pts[i].z);
         const z_j = pts[j].z + inter.s * (pts[j2].z - pts[j].z);
-        const underIdx = z_i < z_j ? i : j;
-
-        for (let d = -GAP_RADIUS; d <= GAP_RADIUS; d++) {
-          gapSegments.add((underIdx + d + N) % N);
-        }
+        crossings.push({
+          x: inter.x, y: inter.y,
+          overIdx: z_i > z_j ? i : j,
+          underIdx: z_i < z_j ? i : j
+        });
       }
     }
   }
 
-  // Build continuous sub-paths (skip gaps)
-  const paths = [];
-  let currentPath = [];
+  const lineWidth = 3 * dpr;
 
-  for (let i = 0; i < N; i++) {
-    if (gapSegments.has(i)) {
-      if (currentPath.length > 1) paths.push(currentPath);
-      currentPath = [];
-    } else {
-      const sp = toScreen(pts[i]);
-      currentPath.push(sp);
-    }
-  }
-  // Handle wrap-around
-  if (currentPath.length > 1) {
-    if (!gapSegments.has(0) && paths.length > 0 && !gapSegments.has(N - 1)) {
-      // Merge last path with first
-      paths[0] = currentPath.concat(paths[0]);
-    } else {
-      paths.push(currentPath);
-    }
-  }
-
-  // Draw with textbook style
-  const lineWidth = 3.5 * dpr;
-
-  // Draw shadow/outline for depth
-  ctx.lineWidth = lineWidth + 2 * dpr;
-  ctx.strokeStyle = 'rgba(0,0,0,0.08)';
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  for (const path of paths) {
-    if (path.length < 2) continue;
-    ctx.beginPath();
-    ctx.moveTo(path[0].x + dpr, path[0].y + dpr);
-    for (let i = 1; i < path.length; i++) {
-      ctx.lineTo(path[i].x + dpr, path[i].y + dpr);
-    }
-    ctx.stroke();
-  }
-
-  // Main curve
+  // Draw full curve
   ctx.lineWidth = lineWidth;
   ctx.strokeStyle = '#2b2b2b';
-  for (const path of paths) {
-    if (path.length < 2) continue;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(screenPts[0].x, screenPts[0].y);
+  for (let i = 1; i < N; i++) ctx.lineTo(screenPts[i].x, screenPts[i].y);
+  ctx.closePath();
+  ctx.stroke();
+
+  // Patch crossings: erase under-strand, redraw over-strand
+  for (const cr of crossings) {
+    const ui = cr.underIdx, ui2 = (ui + 1) % N;
+    const dx = screenPts[ui2].x - screenPts[ui].x;
+    const dy = screenPts[ui2].y - screenPts[ui].y;
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = dx / len, ny = dy / len;
+    const gap = lineWidth * 2.5;
+
+    ctx.lineWidth = lineWidth + 5 * dpr;
+    ctx.strokeStyle = bgColor;
+    ctx.lineCap = 'butt';
     ctx.beginPath();
-    ctx.moveTo(path[0].x, path[0].y);
-    for (let i = 1; i < path.length; i++) {
-      ctx.lineTo(path[i].x, path[i].y);
+    ctx.moveTo(cr.x - nx * gap, cr.y - ny * gap);
+    ctx.lineTo(cr.x + nx * gap, cr.y + ny * gap);
+    ctx.stroke();
+
+    const oi = cr.overIdx;
+    ctx.lineWidth = lineWidth;
+    ctx.strokeStyle = '#2b2b2b';
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    for (let d = -15; d <= 15; d++) {
+      const idx = (oi + d + N) % N;
+      if (d === -15) ctx.moveTo(screenPts[idx].x, screenPts[idx].y);
+      else ctx.lineTo(screenPts[idx].x, screenPts[idx].y);
     }
     ctx.stroke();
   }
+}
 
-  // Draw crossing number in corner
-  ctx.fillStyle = '#999';
-  ctx.font = `${12 * dpr}px Georgia`;
-  ctx.textAlign = 'right';
+// ─── Interactive 2D Knot Diagram ────────────────────────────────
+
+function buildPlanarDiagram(knotFn, angles, w, h, dpr) {
+  const N = 400;
+  const pts = [];
+  for (let i = 0; i < N; i++) {
+    const t = i / N;
+    const p = knotFn(t);
+    const r = rotatePoint(p, angles);
+    pts.push({ x: r[0], y: r[1], z: r[2] });
+  }
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of pts) {
+    if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+  }
+  const margin = 50 * dpr;
+  const scale = Math.min((w - 2 * margin) / (maxX - minX || 1), (h - 2 * margin) / (maxY - minY || 1));
+  const cx = w / 2, cy = h / 2, mx = (minX + maxX) / 2, my = (minY + maxY) / 2;
+  const sp = pts.map(p => ({ x: cx + (p.x - mx) * scale, y: cy + (p.y - my) * scale }));
+
+  const rawCr = [];
+  for (let i = 0; i < N; i++) {
+    const i2 = (i + 1) % N;
+    for (let j = i + 3; j < N; j++) {
+      if ((j + 1) % N === i) continue;
+      const j2 = (j + 1) % N;
+      const inter = segmentIntersection(sp[i].x, sp[i].y, sp[i2].x, sp[i2].y, sp[j].x, sp[j].y, sp[j2].x, sp[j2].y);
+      if (!inter) continue;
+      let dupe = false;
+      for (const e of rawCr) if (Math.hypot(inter.x - e.x, inter.y - e.y) < 5 * dpr) { dupe = true; break; }
+      if (dupe) continue;
+      const zi = pts[i].z + inter.t * (pts[i2].z - pts[i].z);
+      const zj = pts[j].z + inter.s * (pts[j2].z - pts[j].z);
+      const iOver = zi > zj;
+      const ti = { x: sp[i2].x - sp[i].x, y: sp[i2].y - sp[i].y };
+      const tj = { x: sp[j2].x - sp[j].x, y: sp[j2].y - sp[j].y };
+      const ot = iOver ? ti : tj, ut = iOver ? tj : ti;
+      rawCr.push({
+        x: inter.x, y: inter.y,
+        sign: (ot.x * ut.y - ot.y * ut.x) > 0 ? 1 : -1,
+        tOver: (iOver ? i + inter.t : j + inter.s) / N,
+        tUnder: (iOver ? j + inter.s : i + inter.t) / N
+      });
+    }
+  }
+
+  if (rawCr.length === 0) {
+    return { crossings: [], arcs: [{ id: 0, points: sp.map(p => ({...p})), startCrossing: -1, endCrossing: -1 }] };
+  }
+
+  const events = [];
+  rawCr.forEach((c, i) => {
+    events.push({ cIdx: i, t: c.tOver, isOver: true });
+    events.push({ cIdx: i, t: c.tUnder, isOver: false });
+  });
+  events.sort((a, b) => a.t - b.t);
+
+  const crossings = rawCr.map((c, i) => ({
+    id: i, x: c.x, y: c.y, sign: c.sign,
+    overIn: -1, overOut: -1, underIn: -1, underOut: -1
+  }));
+  const arcs = [];
+  for (let i = 0; i < events.length; i++) {
+    const e1 = events[i], e2 = events[(i + 1) % events.length];
+    const points = [{ x: rawCr[e1.cIdx].x, y: rawCr[e1.cIdx].y }];
+    const startK = Math.ceil(e1.t * N) % N;
+    const endK = Math.floor(e2.t * N);
+    if (i === events.length - 1 || e2.t < e1.t) {
+      for (let k = startK; k < N; k++) points.push({...sp[k]});
+      for (let k = 0; k <= (endK % N); k++) points.push({...sp[k]});
+    } else {
+      for (let k = startK; k <= endK && k < N; k++) points.push({...sp[k]});
+    }
+    points.push({ x: rawCr[e2.cIdx].x, y: rawCr[e2.cIdx].y });
+    arcs.push({ id: i, points, startCrossing: e1.cIdx, endCrossing: e2.cIdx });
+    if (e1.isOver) crossings[e1.cIdx].overOut = i; else crossings[e1.cIdx].underOut = i;
+    if (e2.isOver) crossings[e2.cIdx].overIn = i; else crossings[e2.cIdx].underIn = i;
+  }
+  return { crossings, arcs };
+}
+
+function cloneDiagram(d) {
+  return { crossings: d.crossings.map(c => ({...c})), arcs: d.arcs.map(a => ({...a, points: a.points.map(p => ({...p}))})) };
+}
+
+function smoothArc(arc) {
+  const p = arc.points;
+  if (p.length < 5) return;
+  const f = {...p[0]}, l = {...p[p.length - 1]};
+  for (let iter = 0; iter < 3; iter++)
+    for (let i = 2; i < p.length - 2; i++)
+      p[i] = { x: p[i-1].x * 0.25 + p[i].x * 0.5 + p[i+1].x * 0.25, y: p[i-1].y * 0.25 + p[i].y * 0.5 + p[i+1].y * 0.25 };
+  p[0] = f; p[p.length - 1] = l;
+}
+
+function findR1Moves(d) {
+  const moves = [];
+  for (const cr of d.crossings) {
+    const loops = d.arcs.filter(a => a.startCrossing === cr.id && a.endCrossing === cr.id);
+    if (loops.length > 0)
+      moves.push({ type: 'R1', crossing: cr, loopArc: loops.reduce((a, b) => a.points.length <= b.points.length ? a : b) });
+  }
+  return moves;
+}
+
+function findR2Moves(d) {
+  const moves = [];
+  for (let i = 0; i < d.crossings.length; i++) {
+    for (let j = i + 1; j < d.crossings.length; j++) {
+      const c1 = d.crossings[i], c2 = d.crossings[j];
+      if (c1.sign === c2.sign) continue;
+      const conn = d.arcs.filter(a =>
+        (a.startCrossing === c1.id && a.endCrossing === c2.id) ||
+        (a.startCrossing === c2.id && a.endCrossing === c1.id)
+      );
+      if (conn.length === 2) moves.push({ type: 'R2', crossings: [c1, c2], bigonArcs: conn });
+    }
+  }
+  return moves;
+}
+
+function applyR1(d, move) {
+  const cr = d.crossings.find(c => c.id === move.crossing.id);
+  const loop = d.arcs.find(a => a.id === move.loopArc.id);
+  if (!cr || !loop) return;
+  const loopIsOverOut = cr.overOut === loop.id;
+  const loopIsOverIn = cr.overIn === loop.id;
+  const inId = loopIsOverIn ? cr.underIn : cr.overIn;
+  const outId = loopIsOverOut ? cr.underOut : cr.overOut;
+  const inArc = d.arcs.find(a => a.id === inId);
+  const outArc = d.arcs.find(a => a.id === outId);
+  if (!inArc || !outArc) return;
+
+  if (inArc.id === outArc.id) {
+    // Single-crossing knot: remaining arc becomes simple loop
+    inArc.startCrossing = -1; inArc.endCrossing = -1;
+    d.crossings = d.crossings.filter(c => c.id !== cr.id);
+    d.arcs = d.arcs.filter(a => a.id !== loop.id);
+    return;
+  }
+  inArc.points = [...inArc.points, ...outArc.points.slice(1)];
+  inArc.endCrossing = outArc.endCrossing;
+  if (outArc.endCrossing >= 0) {
+    const t = d.crossings.find(c => c.id === outArc.endCrossing);
+    if (t) { if (t.overIn === outArc.id) t.overIn = inArc.id; if (t.underIn === outArc.id) t.underIn = inArc.id; }
+  }
+  d.crossings = d.crossings.filter(c => c.id !== cr.id);
+  d.arcs = d.arcs.filter(a => a.id !== loop.id && a.id !== outArc.id);
+  smoothArc(inArc);
+}
+
+function applyR2(d, move) {
+  const c1 = d.crossings.find(c => c.id === move.crossings[0].id);
+  const c2 = d.crossings.find(c => c.id === move.crossings[1].id);
+  const bigA = d.arcs.find(a => a.id === move.bigonArcs[0].id);
+  const bigB = d.arcs.find(a => a.id === move.bigonArcs[1].id);
+  if (!c1 || !c2 || !bigA || !bigB) return;
+
+  function traceThrough(arc) {
+    const sCr = d.crossings.find(c => c.id === arc.startCrossing);
+    const eCr = d.crossings.find(c => c.id === arc.endCrossing);
+    const sArm = sCr.overOut === arc.id ? 'over' : 'under';
+    const eArm = eCr.overIn === arc.id ? 'over' : 'under';
+    return {
+      inId: sArm === 'over' ? sCr.overIn : sCr.underIn,
+      outId: eArm === 'over' ? eCr.overOut : eCr.underOut
+    };
+  }
+  const trA = traceThrough(bigA), trB = traceThrough(bigB);
+  const inArc1 = d.arcs.find(a => a.id === trA.inId);
+  const outArc1 = d.arcs.find(a => a.id === trA.outId);
+  const inArc2 = d.arcs.find(a => a.id === trB.inId);
+  const outArc2 = d.arcs.find(a => a.id === trB.outId);
+  if (!inArc1 || !outArc1 || !inArc2 || !outArc2) return;
+
+  const toRemove = new Set([bigA.id, bigB.id]);
+
+  if (inArc1.id === outArc2.id && inArc2.id === outArc1.id) {
+    // Only these 2 crossings: external arcs form a loop
+    inArc1.points = [...inArc1.points, ...outArc1.points.slice(1)];
+    inArc1.startCrossing = -1; inArc1.endCrossing = -1;
+    toRemove.add(outArc1.id);
+    d.crossings = d.crossings.filter(c => c.id !== c1.id && c.id !== c2.id);
+    d.arcs = d.arcs.filter(a => !toRemove.has(a.id));
+    smoothArc(inArc1);
+    return;
+  }
+
+  inArc1.points = [...inArc1.points, ...outArc1.points.slice(1)];
+  inArc1.endCrossing = outArc1.endCrossing;
+  if (outArc1.endCrossing >= 0) {
+    const t = d.crossings.find(c => c.id === outArc1.endCrossing);
+    if (t) { if (t.overIn === outArc1.id) t.overIn = inArc1.id; if (t.underIn === outArc1.id) t.underIn = inArc1.id; }
+  }
+  toRemove.add(outArc1.id);
+
+  inArc2.points = [...inArc2.points, ...outArc2.points.slice(1)];
+  inArc2.endCrossing = outArc2.endCrossing;
+  if (outArc2.endCrossing >= 0) {
+    const t = d.crossings.find(c => c.id === outArc2.endCrossing);
+    if (t) { if (t.overIn === outArc2.id) t.overIn = inArc2.id; if (t.underIn === outArc2.id) t.underIn = inArc2.id; }
+  }
+  toRemove.add(outArc2.id);
+
+  d.crossings = d.crossings.filter(c => c.id !== c1.id && c.id !== c2.id);
+  d.arcs = d.arcs.filter(a => !toRemove.has(a.id));
+  smoothArc(inArc1);
+  smoothArc(inArc2);
+}
+
+let activeEditor = null;
+
+class DiagramEditor {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.knotFn = null; this.angles = null;
+    this.diagram = null; this.hoveredMove = null;
+    this.ghost = null; this.dragging = null;
+    this.moveCount = 0; this.history = [];
+    this._setupEvents();
+  }
+
+  setKnot(fn, angles) {
+    this.knotFn = fn; this.angles = angles;
+    this.diagram = null; this.hoveredMove = null;
+    this.ghost = null; this.dragging = null;
+    this.moveCount = 0; this.history = [];
+  }
+
+  render(dt) {
+    if (!this.knotFn) return;
+    const dpr = window.devicePixelRatio || 1;
+    const rect = this.canvas.getBoundingClientRect();
+    const w = rect.width * dpr | 0, h = rect.height * dpr | 0;
+    if (w === 0 || h === 0) return;
+    if (this.canvas.width !== w || this.canvas.height !== h) {
+      this.canvas.width = w; this.canvas.height = h; this.diagram = null;
+    }
+    if (!this.diagram) {
+      this.diagram = buildPlanarDiagram(this.knotFn, this.angles, w, h, dpr);
+      this.moveCount = 0; this.history = [];
+    }
+    if (this.ghost) { this.ghost.alpha -= dt / 0.3; if (this.ghost.alpha <= 0) this.ghost = null; }
+    this._draw(dpr);
+  }
+
+  undo() {
+    if (!this.history.length || this.ghost) return;
+    this.diagram = this.history.pop();
+    this.moveCount = Math.max(0, this.moveCount - 1);
+    this.hoveredMove = null; this.ghost = null;
+  }
+
+  _draw(dpr) {
+    const ctx = this.ctx, w = this.canvas.width, h = this.canvas.height;
+    const bg = '#f5f0e8', lw = 3 * dpr, d = this.diagram;
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
+
+    ctx.lineWidth = lw; ctx.strokeStyle = '#2b2b2b'; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    for (const arc of d.arcs) {
+      if (arc.points.length < 2) continue;
+      ctx.beginPath(); ctx.moveTo(arc.points[0].x, arc.points[0].y);
+      for (let i = 1; i < arc.points.length; i++) ctx.lineTo(arc.points[i].x, arc.points[i].y);
+      ctx.stroke();
+    }
+
+    for (const cr of d.crossings) {
+      const uIn = d.arcs.find(a => a.id === cr.underIn), uOut = d.arcs.find(a => a.id === cr.underOut);
+      let dx = 0, dy = 0;
+      if (uOut && uOut.points.length > 1) { dx += uOut.points[1].x - uOut.points[0].x; dy += uOut.points[1].y - uOut.points[0].y; }
+      if (uIn && uIn.points.length > 1) { const l = uIn.points.length - 1; dx += uIn.points[l].x - uIn.points[l-1].x; dy += uIn.points[l].y - uIn.points[l-1].y; }
+      const len = Math.hypot(dx, dy) || 1, nx = dx/len, ny = dy/len, gap = lw * 2.5;
+      ctx.lineWidth = lw + 5 * dpr; ctx.strokeStyle = bg; ctx.lineCap = 'butt';
+      ctx.beginPath(); ctx.moveTo(cr.x - nx*gap, cr.y - ny*gap); ctx.lineTo(cr.x + nx*gap, cr.y + ny*gap); ctx.stroke();
+
+      const oIn = d.arcs.find(a => a.id === cr.overIn), oOut = d.arcs.find(a => a.id === cr.overOut);
+      ctx.lineWidth = lw; ctx.strokeStyle = '#2b2b2b'; ctx.lineCap = 'round';
+      ctx.beginPath();
+      if (oIn) { const s = Math.max(0, oIn.points.length - 8); ctx.moveTo(oIn.points[s].x, oIn.points[s].y); for (let i = s+1; i < oIn.points.length; i++) ctx.lineTo(oIn.points[i].x, oIn.points[i].y); }
+      if (oOut) { const e = Math.min(oOut.points.length, 8); if (!oIn) ctx.moveTo(oOut.points[0].x, oOut.points[0].y); else ctx.lineTo(oOut.points[0].x, oOut.points[0].y); for (let i = 1; i < e; i++) ctx.lineTo(oOut.points[i].x, oOut.points[i].y); }
+      ctx.stroke();
+    }
+
+    if (this.ghost) {
+      ctx.globalAlpha = this.ghost.alpha;
+      ctx.lineWidth = lw; ctx.strokeStyle = '#f85149'; ctx.lineCap = 'round';
+      for (const arc of this.ghost.arcs) {
+        if (arc.points.length < 2) continue;
+        ctx.beginPath(); ctx.moveTo(arc.points[0].x, arc.points[0].y);
+        for (let i = 1; i < arc.points.length; i++) ctx.lineTo(arc.points[i].x, arc.points[i].y);
+        ctx.stroke();
+      }
+      ctx.fillStyle = '#f85149';
+      for (const cr of this.ghost.crossings) { ctx.beginPath(); ctx.arc(cr.x, cr.y, lw * 3, 0, TAU); ctx.fill(); }
+      ctx.globalAlpha = 1;
+    }
+
+    if (this.hoveredMove && !this.ghost) {
+      const m = this.hoveredMove;
+      ctx.lineWidth = 2 * dpr;
+      if (m.type === 'R1') {
+        ctx.fillStyle = 'rgba(88,166,255,0.2)'; ctx.strokeStyle = 'rgba(88,166,255,0.6)';
+        ctx.beginPath(); ctx.arc(m.crossing.x, m.crossing.y, lw * 5, 0, TAU); ctx.fill(); ctx.stroke();
+        if (m.loopArc.points.length >= 2) {
+          ctx.lineWidth = lw + 3 * dpr; ctx.strokeStyle = 'rgba(88,166,255,0.4)';
+          ctx.beginPath(); ctx.moveTo(m.loopArc.points[0].x, m.loopArc.points[0].y);
+          for (let i = 1; i < m.loopArc.points.length; i++) ctx.lineTo(m.loopArc.points[i].x, m.loopArc.points[i].y);
+          ctx.stroke();
+        }
+      } else if (m.type === 'R2') {
+        ctx.fillStyle = 'rgba(63,185,80,0.2)'; ctx.strokeStyle = 'rgba(63,185,80,0.6)';
+        for (const cr of m.crossings) { ctx.beginPath(); ctx.arc(cr.x, cr.y, lw * 5, 0, TAU); ctx.fill(); ctx.stroke(); }
+        ctx.lineWidth = lw + 3 * dpr; ctx.strokeStyle = 'rgba(63,185,80,0.3)';
+        for (const arc of m.bigonArcs) {
+          if (arc.points.length >= 2) {
+            ctx.beginPath(); ctx.moveTo(arc.points[0].x, arc.points[0].y);
+            for (let i = 1; i < arc.points.length; i++) ctx.lineTo(arc.points[i].x, arc.points[i].y);
+            ctx.stroke();
+          }
+        }
+      }
+    }
+
+    if (this.moveCount > 0) {
+      ctx.fillStyle = '#999'; ctx.font = `${11 * dpr}px Georgia`; ctx.textAlign = 'right';
+      ctx.fillText(`${this.moveCount} move${this.moveCount !== 1 ? 's' : ''}`, w - 10 * dpr, h - 10 * dpr);
+    }
+  }
+
+  _setupEvents() {
+    const getPos = e => {
+      const r = this.canvas.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+      return { x: (e.clientX - r.left) * dpr, y: (e.clientY - r.top) * dpr };
+    };
+    this.canvas.addEventListener('pointermove', e => {
+      if (!this.diagram) return;
+      if (this.dragging) this._drag(getPos(e));
+      else this._updateHover(getPos(e));
+    });
+    this.canvas.addEventListener('pointerdown', e => {
+      if (!this.diagram || this.ghost) return;
+      activeEditor = this;
+      const pos = getPos(e);
+      this._updateHover(pos);
+      if (this.hoveredMove) this._applyMove(this.hoveredMove);
+      else this._startDrag(pos, e);
+    });
+    this.canvas.addEventListener('pointerup', () => this._endDrag());
+    this.canvas.addEventListener('pointerleave', () => { this.hoveredMove = null; this.canvas.style.cursor = ''; this._endDrag(); });
+  }
+
+  _updateHover(pos) {
+    if (!this.diagram || !this.diagram.crossings.length) {
+      this.hoveredMove = null;
+      this.canvas.style.cursor = this.dragging ? 'grabbing' : '';
+      return;
+    }
+    const dpr = window.devicePixelRatio || 1, thr = 25 * dpr;
+    const moves = [];
+    for (const m of findR1Moves(this.diagram)) {
+      const dist = Math.hypot(pos.x - m.crossing.x, pos.y - m.crossing.y);
+      if (dist < thr) moves.push({...m, dist});
+    }
+    for (const m of findR2Moves(this.diagram)) {
+      const d1 = Math.hypot(pos.x - m.crossings[0].x, pos.y - m.crossings[0].y);
+      const d2 = Math.hypot(pos.x - m.crossings[1].x, pos.y - m.crossings[1].y);
+      if (Math.min(d1, d2) < thr * 1.5) moves.push({...m, dist: Math.min(d1, d2)});
+    }
+    if (moves.length) {
+      moves.sort((a, b) => a.dist - b.dist);
+      this.hoveredMove = moves[0];
+      this.canvas.style.cursor = 'pointer';
+    } else {
+      this.hoveredMove = null;
+      this.canvas.style.cursor = '';
+    }
+  }
+
+  _applyMove(move) {
+    this.history.push(cloneDiagram(this.diagram));
+    const gc = [], ga = [];
+    if (move.type === 'R1') {
+      gc.push({...move.crossing});
+      ga.push({ points: move.loopArc.points.map(p => ({...p})) });
+      applyR1(this.diagram, move);
+    } else if (move.type === 'R2') {
+      move.crossings.forEach(c => gc.push({...c}));
+      move.bigonArcs.forEach(a => ga.push({ points: a.points.map(p => ({...p})) }));
+      applyR2(this.diagram, move);
+    }
+    this.ghost = { crossings: gc, arcs: ga, alpha: 1 };
+    this.moveCount++;
+    this.hoveredMove = null;
+  }
+
+  _startDrag(pos, e) {
+    const dpr = window.devicePixelRatio || 1;
+    let best = 20 * dpr, arc = null, idx = 0;
+    for (const a of this.diagram.arcs) {
+      for (let i = 1; i < a.points.length - 1; i++) {
+        const d = Math.hypot(a.points[i].x - pos.x, a.points[i].y - pos.y);
+        if (d < best) { best = d; arc = a; idx = i; }
+      }
+    }
+    if (!arc) return;
+    this.dragging = { arc, idx, start: {...pos}, orig: arc.points.map(p => ({...p})) };
+    this.canvas.setPointerCapture(e.pointerId);
+    this.canvas.style.cursor = 'grabbing';
+  }
+
+  _drag(pos) {
+    if (!this.dragging) return;
+    const { arc, idx, start, orig } = this.dragging;
+    const dx = pos.x - start.x, dy = pos.y - start.y;
+    const rad = Math.min(40, arc.points.length / 3);
+    for (let i = 1; i < arc.points.length - 1; i++) {
+      const dist = Math.abs(i - idx);
+      if (dist < rad) {
+        const w = Math.cos(dist / rad * Math.PI * 0.5);
+        arc.points[i] = { x: orig[i].x + dx * w, y: orig[i].y + dy * w };
+      }
+    }
+  }
+
+  _endDrag() {
+    if (!this.dragging) return;
+    this.dragging = null;
+    this.canvas.style.cursor = '';
+  }
 }
 
 // ─── Game State ──────────────────────────────────────────────────
 
 let viewMode = '3d';
+let difficulty = 'normal';
 let correct = 0, total = 0, wrong = 0, streak = 0;
 let currentAnswer = null; // true if same
 let leftKnotDef = null, rightKnotDef = null;
+let leftFn = null, rightFn = null;
 let leftAngles = [0,0,0], rightAngles = [0,0,0];
+let leftMirrored = false, rightMirrored = false;
+let chiralityRound = false;
 let waiting = false;
 
 const rendererLeft = new KnotRenderer3D(document.getElementById('canvas3dLeft'));
@@ -876,6 +1312,9 @@ rendererLeft.color = [0.85, 0.45, 0.25];  // warm orange
 rendererRight.color = [0.30, 0.55, 0.90]; // cool blue
 rendererRight.autoRotSpeed = -0.35 - Math.random() * 0.2;
 
+const leftEditor = new DiagramEditor(document.getElementById('canvas2dLeft'));
+const rightEditor = new DiagramEditor(document.getElementById('canvas2dRight'));
+
 function newRound() {
   waiting = false;
   document.getElementById('btnYes').disabled = false;
@@ -883,26 +1322,80 @@ function newRound() {
   document.getElementById('feedback').textContent = '';
   document.getElementById('feedback').className = 'feedback';
 
-  const same = Math.random() < 0.5;
-  const idx1 = Math.floor(Math.random() * KNOT_DEFS.length);
-  let idx2 = idx1;
-  if (!same) {
-    while (idx2 === idx1) idx2 = Math.floor(Math.random() * KNOT_DEFS.length);
-  }
+  leftMirrored = false;
+  rightMirrored = false;
+  chiralityRound = false;
 
-  leftKnotDef = KNOT_DEFS[idx1];
-  rightKnotDef = KNOT_DEFS[idx2];
-  currentAnswer = same;
+  if (difficulty === 'impossible') {
+    const rand = Math.random();
+    if (rand < 0.35) {
+      // Same knot, same chirality
+      const idx = Math.floor(Math.random() * KNOT_DEFS.length);
+      leftKnotDef = rightKnotDef = KNOT_DEFS[idx];
+      currentAnswer = true;
+    } else if (rand < 0.65) {
+      // Same knot type, one mirrored (chiral knots only)
+      const chiralDefs = KNOT_DEFS.filter(k => CHIRAL_KNOTS.has(k.id));
+      const knot = chiralDefs[Math.floor(Math.random() * chiralDefs.length)];
+      leftKnotDef = rightKnotDef = knot;
+      rightMirrored = true;
+      chiralityRound = true;
+      currentAnswer = false;
+    } else {
+      // Different knots
+      const idx1 = Math.floor(Math.random() * KNOT_DEFS.length);
+      let idx2 = idx1;
+      while (idx2 === idx1) idx2 = Math.floor(Math.random() * KNOT_DEFS.length);
+      leftKnotDef = KNOT_DEFS[idx1];
+      rightKnotDef = KNOT_DEFS[idx2];
+      currentAnswer = false;
+    }
+  } else {
+    const same = Math.random() < 0.5;
+    const idx1 = Math.floor(Math.random() * KNOT_DEFS.length);
+    let idx2 = idx1;
+    if (!same) {
+      while (idx2 === idx1) idx2 = Math.floor(Math.random() * KNOT_DEFS.length);
+    }
+    leftKnotDef = KNOT_DEFS[idx1];
+    rightKnotDef = KNOT_DEFS[idx2];
+    currentAnswer = same;
+  }
 
   leftAngles = randomAngles();
   rightAngles = randomAngles();
 
-  rendererLeft.setKnot(leftKnotDef.fn, leftAngles);
-  rendererRight.setKnot(rightKnotDef.fn, rightAngles);
+  leftFn = leftMirrored ? mirrorKnotFn(leftKnotDef.fn) : leftKnotDef.fn;
+  rightFn = rightMirrored ? mirrorKnotFn(rightKnotDef.fn) : rightKnotDef.fn;
 
+  rendererLeft.setKnot(leftFn, leftAngles);
+  rendererRight.setKnot(rightFn, rightAngles);
+
+  leftEditor.setKnot(leftFn, leftAngles);
+  rightEditor.setKnot(rightFn, rightAngles);
+
+  // In hard/impossible mode, disable rotation
+  if (difficulty !== 'normal') {
+    rendererLeft.interactionEnabled = false;
+    rendererRight.interactionEnabled = false;
+  } else {
+    rendererLeft.interactionEnabled = true;
+    rendererRight.interactionEnabled = true;
+  }
+
+  // Update drag hints
+  const hintL = document.getElementById('dragHintLeft');
+  const hintR = document.getElementById('dragHintRight');
   if (viewMode === '2d') {
-    render2DKnot(document.getElementById('canvas2dLeft'), leftKnotDef.fn, leftAngles);
-    render2DKnot(document.getElementById('canvas2dRight'), rightKnotDef.fn, rightAngles);
+    hintL.textContent = 'click crossings to simplify \u2022 drag strands \u2022 Z to undo';
+    hintR.textContent = 'click crossings to simplify \u2022 drag strands \u2022 Z to undo';
+    hintL.style.display = ''; hintR.style.display = '';
+  } else {
+    hintL.textContent = 'drag to rotate';
+    hintR.textContent = 'drag to rotate';
+    const showHints = difficulty === 'normal';
+    hintL.style.display = showHints ? '' : 'none';
+    hintR.style.display = showHints ? '' : 'none';
   }
 }
 
@@ -923,6 +1416,8 @@ function answer(userSaidYes) {
     const streakText = streak >= 3 ? ` (${streak} streak!)` : '';
     if (currentAnswer) {
       fb.textContent = `Correct! Both are ${leftKnotDef.name}.${streakText} ${leftKnotDef.fact}`;
+    } else if (chiralityRound) {
+      fb.textContent = `Correct! These are mirror images of ${leftKnotDef.name} — different chirality.${streakText}`;
     } else {
       fb.textContent = `Correct! ${leftKnotDef.name} ≠ ${rightKnotDef.name}.${streakText}`;
     }
@@ -932,6 +1427,8 @@ function answer(userSaidYes) {
     fb.className = 'feedback wrong-feedback';
     if (currentAnswer) {
       fb.textContent = `Wrong — both are ${leftKnotDef.name}! ${leftKnotDef.fact}`;
+    } else if (chiralityRound) {
+      fb.textContent = `Wrong — these are mirror images of ${leftKnotDef.name} (different chirality)!`;
     } else {
       fb.textContent = `Wrong — ${leftKnotDef.name} ≠ ${rightKnotDef.name}.`;
     }
@@ -961,16 +1458,48 @@ function setViewMode(mode) {
     c2L.style.display = 'none'; c2R.style.display = 'none';
     document.getElementById('panelLeft').classList.remove('panel-2d');
     document.getElementById('panelRight').classList.remove('panel-2d');
-    hintL.style.display = ''; hintR.style.display = '';
+    hintL.textContent = 'drag to rotate';
+    hintR.textContent = 'drag to rotate';
+    const showHints = difficulty === 'normal';
+    hintL.style.display = showHints ? '' : 'none';
+    hintR.style.display = showHints ? '' : 'none';
   } else {
     c3L.style.display = 'none'; c3R.style.display = 'none';
     c2L.style.display = 'block'; c2R.style.display = 'block';
     document.getElementById('panelLeft').classList.add('panel-2d');
     document.getElementById('panelRight').classList.add('panel-2d');
-    hintL.style.display = 'none'; hintR.style.display = 'none';
-    render2DKnot(c2L, leftKnotDef.fn, leftAngles);
-    render2DKnot(c2R, rightKnotDef.fn, rightAngles);
+    hintL.textContent = 'click crossings to simplify \u2022 drag strands \u2022 Z to undo';
+    hintR.textContent = 'click crossings to simplify \u2022 drag strands \u2022 Z to undo';
+    hintL.style.display = ''; hintR.style.display = '';
   }
+}
+
+function setDifficulty(mode) {
+  difficulty = mode;
+  document.getElementById('btnNormal').classList.toggle('active', mode === 'normal');
+  document.getElementById('btnHard').classList.toggle('active', mode === 'hard');
+  document.getElementById('btnImpossible').classList.toggle('active', mode === 'impossible');
+
+  const q = document.getElementById('questionText');
+  const hint = document.getElementById('modeHint');
+  if (mode === 'normal') {
+    q.textContent = 'Are these the same type of knot?';
+    hint.textContent = '';
+  } else if (mode === 'hard') {
+    q.textContent = 'Are these the same type of knot?';
+    hint.textContent = 'No rotation \u2014 identify from a fixed view';
+  } else {
+    q.textContent = 'Are these the same knot?';
+    hint.textContent = 'No rotation \u2014 mirror images are distinct (chirality matters)';
+  }
+
+  // Reset score
+  correct = 0; total = 0; wrong = 0; streak = 0;
+  document.getElementById('correctCount').textContent = '0';
+  document.getElementById('totalCount').textContent = '0';
+  document.getElementById('wrongCount').textContent = '0';
+
+  newRound();
 }
 
 // ─── Animation Loop ──────────────────────────────────────────────
@@ -984,11 +1513,17 @@ function animate(now) {
   if (viewMode === '3d') {
     rendererLeft.render(dt);
     rendererRight.render(dt);
+  } else {
+    leftEditor.render(dt);
+    rightEditor.render(dt);
   }
 }
 
 // ─── Keyboard Shortcuts ──────────────────────────────────────────
 document.addEventListener('keydown', e => {
+  if ((e.key === 'z' || e.key === 'Z') && viewMode === '2d' && activeEditor) {
+    activeEditor.undo(); return;
+  }
   if (waiting) return;
   if (e.key === 'y' || e.key === 'Y') answer(true);
   if (e.key === 'n' || e.key === 'N') answer(false);
@@ -998,10 +1533,7 @@ document.addEventListener('keydown', e => {
 
 // ─── Resize Handler ──────────────────────────────────────────────
 window.addEventListener('resize', () => {
-  if (viewMode === '2d') {
-    render2DKnot(document.getElementById('canvas2dLeft'), leftKnotDef.fn, leftAngles);
-    render2DKnot(document.getElementById('canvas2dRight'), rightKnotDef.fn, rightAngles);
-  }
+  // 2D editors handle resize automatically in their render loop
 });
 
 // ─── Start ───────────────────────────────────────────────────────
