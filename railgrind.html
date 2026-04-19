@@ -1,0 +1,1188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>RAILGRIND</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0A0A0F;
+    font-family:system-ui,-apple-system,"Helvetica Neue",Impact,sans-serif;
+    user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent;
+    touch-action:none;overscroll-behavior:none}
+  body{display:flex;justify-content:center;align-items:center}
+  canvas{display:block;image-rendering:auto}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+'use strict';
+
+// ============================================================
+// === CONFIG =================================================
+// ============================================================
+const CFG = {
+  // Logical resolution — letterboxed to fit viewport
+  W: 960, H: 540,
+
+  // Rail / world
+  TILE: 56,              // tile width in px
+  RAIL_Y: 410,           // y of the rail top surface (cart sits here)
+
+  // Cart
+  CART_W: 60, CART_H: 44,
+  CART_SCREEN_X: 280,    // cart's fixed screen x (camera-locked)
+
+  // Physics
+  GRAVITY: 1700,         // px/s^2
+  JUMP_V: 780,           // upward jump velocity
+  COYOTE: 0.08,          // 80ms coyote window after leaving rail
+  JUMP_BUFFER: 0.10,     // 100ms input buffer
+
+  // Speed
+  SPEED_BASE: 320,       // starting horizontal speed (px/s)
+  SPEED_CAP: 400,        // ~+25% plateau
+  SPEED_RAMP: 1.33,      // px/s per second — reach cap at ~60s
+
+  // Chunk generation
+  CHUNK_FLAT_MIN: 6, CHUNK_FLAT_MAX: 10,
+  GAP_MIN: 2,
+  GAP_MAX_TILES_CAP: 4,
+  SAFETY_TILES: 1,       // margin below max-jumpable
+  FLAT_EVERY: 4,         // force flat after N non-flat chunks
+  EARLY_METERS: 300,     // no back-to-back non-flat until this distance
+  ENEMY_UNLOCK_M: 500,
+  GAPENEMY_UNLOCK_M: 1200,
+
+  // Game over
+  DEATH_LOCKOUT: 0.6,    // 600ms before restart accepted
+  DYING_DURATION: 0.7,   // time in 'dying' state before transitioning
+  FREEZE_FRAME: 0.22,    // hold death frame this long
+
+  // Units
+  M_PER_PX: 0.03,        // 1 meter = ~33 px
+
+  // Loop
+  STEP: 1/60,
+
+  // Palette — use 3-4 per scene, not all five
+  C_PINK:   '#FF2E88',
+  C_CYAN:   '#00E5FF',
+  C_YELLOW: '#FFE500',
+  C_BLACK:  '#0A0A0F',
+  C_BONE:   '#F5F1E8',
+  C_DARK:   '#0a1a24',
+  C_MID:    '#0d2a38',
+  C_SUB:    '#081418',
+
+  OUTLINE: 3,
+};
+
+// Derived: max horizontally jumpable distance (in tiles) at given speed
+function maxJumpableTiles(speed) {
+  const airtime = 2 * CFG.JUMP_V / CFG.GRAVITY;
+  const distPx = speed * airtime;
+  const tiles = Math.floor(distPx / CFG.TILE) - CFG.SAFETY_TILES;
+  return Math.max(2, tiles);
+}
+
+// ============================================================
+// === STATE ==================================================
+// ============================================================
+const S = {
+  state: 'title',        // title | playing | dying | over
+  stateTime: 0,
+  playTime: 0,
+  camX: 0,
+  speed: CFG.SPEED_BASE,
+
+  cartY: CFG.RAIL_Y,
+  cartVY: 0,
+  cartOnRail: true,
+  coyote: 0,
+  jumpBuffer: 0,
+
+  // Interpolation snapshots
+  prevCamX: 0,
+  prevCartY: CFG.RAIL_Y,
+
+  // World stream
+  tiles: [],             // boolean array; tiles[0] = rail at firstTileIdx
+  firstTileIdx: 0,
+  nextChunkTile: 0,
+  enemies: [],           // { tileIdx, bob, alive }
+  lastNonFlat: false,
+  chunksSinceFlat: 0,
+
+  particles: [],
+  shake: 0,
+  inputLock: 0,
+  freezeFrame: 0,
+
+  distanceM: 0,
+  best: 0,
+  muted: true,
+  titleBob: 0,
+};
+
+try { S.best = parseInt(localStorage.getItem('railgrind.best') || '0') || 0; } catch (e) {}
+
+// ============================================================
+// === CANVAS / RESIZE ========================================
+// ============================================================
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let viewScale = 1, offsetX = 0, offsetY = 0, dpr = 1;
+
+function resize() {
+  dpr = Math.min(2, window.devicePixelRatio || 1);
+  const vw = window.innerWidth, vh = window.innerHeight;
+  viewScale = Math.min(vw / CFG.W, vh / CFG.H);
+  const cw = CFG.W * viewScale, ch = CFG.H * viewScale;
+  offsetX = (vw - cw) / 2;
+  offsetY = (vh - ch) / 2;
+  canvas.width = vw * dpr;
+  canvas.height = vh * dpr;
+  canvas.style.width = vw + 'px';
+  canvas.style.height = vh + 'px';
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ============================================================
+// === PATTERNS (halftone) ====================================
+// ============================================================
+let halftoneDark = null, halftonePink = null, halftoneCyan = null;
+function makeHalftone(color, size, dotR) {
+  const o = document.createElement('canvas');
+  o.width = size; o.height = size;
+  const c = o.getContext('2d');
+  c.fillStyle = color;
+  c.beginPath(); c.arc(size * 0.5, size * 0.5, dotR, 0, Math.PI * 2); c.fill();
+  c.beginPath(); c.arc(0, 0, dotR, 0, Math.PI * 2); c.fill();
+  c.beginPath(); c.arc(size, 0, dotR, 0, Math.PI * 2); c.fill();
+  c.beginPath(); c.arc(0, size, dotR, 0, Math.PI * 2); c.fill();
+  c.beginPath(); c.arc(size, size, dotR, 0, Math.PI * 2); c.fill();
+  return ctx.createPattern(o, 'repeat');
+}
+function initPatterns() {
+  halftoneDark = makeHalftone('rgba(10,10,15,0.40)', 10, 1.6);
+  halftonePink = makeHalftone('rgba(255,46,136,0.25)', 12, 1.8);
+  halftoneCyan = makeHalftone('rgba(0,229,255,0.22)', 14, 1.8);
+}
+
+// ============================================================
+// === INPUT ==================================================
+// ============================================================
+let jumpPressed = false;
+
+function pressJump() {
+  jumpPressed = true;
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+window.addEventListener('keydown', e => {
+  if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') {
+    e.preventDefault();
+    if (!e.repeat) pressJump();
+  } else if (e.code === 'KeyM') {
+    e.preventDefault();
+    S.muted = !S.muted;
+  }
+}, { passive: false });
+canvas.addEventListener('mousedown', e => { e.preventDefault(); pressJump(); });
+canvas.addEventListener('touchstart', e => { e.preventDefault(); pressJump(); }, { passive: false });
+window.addEventListener('contextmenu', e => e.preventDefault());
+
+// ============================================================
+// === AUDIO ==================================================
+// ============================================================
+let audioCtx = null;
+function beep(freq, dur, type = 'square', vol = 0.08, slideTo = null) {
+  if (S.muted) return;
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const t = audioCtx.currentTime;
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(freq, t);
+    if (slideTo != null) o.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(t); o.stop(t + dur);
+  } catch (e) {}
+}
+const sndJump = () => beep(420, 0.09, 'square', 0.07, 720);
+const sndLand = () => beep(160, 0.06, 'sine', 0.05);
+function sndDeath() {
+  beep(320, 0.15, 'sawtooth', 0.09, 140);
+  setTimeout(() => beep(200, 0.22, 'square', 0.08, 80), 90);
+  setTimeout(() => beep(90, 0.35, 'sawtooth', 0.08, 50), 250);
+}
+
+// ============================================================
+// === CHUNKS =================================================
+// ============================================================
+function pushChunk(length, gapStart, gapLen, enemyOffsets) {
+  const startIdx = S.nextChunkTile;
+  const baseLocal = startIdx - S.firstTileIdx;
+  for (let i = 0; i < length; i++) {
+    let solid = true;
+    if (gapStart != null && i >= gapStart && i < gapStart + gapLen) solid = false;
+    S.tiles[baseLocal + i] = solid;
+  }
+  if (enemyOffsets) {
+    for (const off of enemyOffsets) {
+      S.enemies.push({
+        tileIdx: startIdx + off,
+        bob: Math.random() * Math.PI * 2,
+        alive: true,
+      });
+    }
+  }
+  S.nextChunkTile += length;
+}
+
+function generateChunk() {
+  const m = S.distanceM;
+
+  // Allowed types at this difficulty
+  const allowed = ['flat', 'gap'];
+  if (m > CFG.ENEMY_UNLOCK_M) allowed.push('enemy');
+  if (m > CFG.GAPENEMY_UNLOCK_M) allowed.push('gapenemy');
+
+  // Force flat after FLAT_EVERY non-flats, and in early game avoid back-to-back
+  let type;
+  if (S.chunksSinceFlat >= CFG.FLAT_EVERY) {
+    type = 'flat';
+  } else if (m < CFG.EARLY_METERS && S.lastNonFlat) {
+    type = 'flat';
+  } else {
+    const weights = {
+      flat:     m < 200 ? 3.0 : (m < 600 ? 2.0 : 1.5),
+      gap:      m < 100 ? 0.5 : (m < 500 ? 1.2 : 1.5),
+      enemy:    m < CFG.ENEMY_UNLOCK_M ? 0 : (m < 1500 ? 1.2 : 1.5),
+      gapenemy: m < CFG.GAPENEMY_UNLOCK_M ? 0 : 1.3,
+    };
+    let total = 0;
+    for (const k of allowed) total += weights[k];
+    let r = Math.random() * total;
+    for (const k of allowed) {
+      r -= weights[k];
+      if (r <= 0) { type = k; break; }
+    }
+    if (!type) type = 'flat';
+  }
+
+  S.lastNonFlat = type !== 'flat';
+  S.chunksSinceFlat = type === 'flat' ? 0 : S.chunksSinceFlat + 1;
+
+  // SOLVABILITY CLAMP: gap width strictly below max jumpable at current speed
+  const maxGap = Math.min(CFG.GAP_MAX_TILES_CAP, maxJumpableTiles(S.speed));
+
+  if (type === 'flat') {
+    const len = CFG.CHUNK_FLAT_MIN + Math.floor(Math.random() * (CFG.CHUNK_FLAT_MAX - CFG.CHUNK_FLAT_MIN + 1));
+    pushChunk(len);
+  } else if (type === 'gap') {
+    const gapLen = CFG.GAP_MIN + Math.floor(Math.random() * Math.max(1, maxGap - CFG.GAP_MIN + 1));
+    const leftRun = 3 + Math.floor(Math.random() * 3);
+    const rightRun = 3 + Math.floor(Math.random() * 3);
+    pushChunk(leftRun + gapLen + rightRun, leftRun, gapLen);
+  } else if (type === 'enemy') {
+    const len = 8 + Math.floor(Math.random() * 4);
+    const off = 3 + Math.floor(Math.random() * Math.max(1, len - 5));
+    pushChunk(len, null, 0, [off]);
+  } else if (type === 'gapenemy') {
+    const gapLen = CFG.GAP_MIN + Math.floor(Math.random() * Math.max(1, maxGap - CFG.GAP_MIN));
+    const leftRun = 3 + Math.floor(Math.random() * 3);
+    const rightRun = 4 + Math.floor(Math.random() * 3);
+    const len = leftRun + gapLen + rightRun;
+    const off = leftRun + gapLen + 1 + Math.floor(Math.random() * 2);
+    pushChunk(len, leftRun, gapLen, [off]);
+  }
+}
+
+function ensureWorldAhead() {
+  const rightEdgeTile = Math.ceil((S.camX + CFG.W + 240) / CFG.TILE);
+  let safety = 0;
+  while (S.nextChunkTile < rightEdgeTile && safety++ < 40) generateChunk();
+}
+
+function cullWorldBehind() {
+  const leftTile = Math.floor((S.camX - 200) / CFG.TILE);
+  const toRemove = leftTile - S.firstTileIdx;
+  if (toRemove > 60) {
+    S.tiles.splice(0, toRemove);
+    S.firstTileIdx += toRemove;
+  }
+  S.enemies = S.enemies.filter(e => (e.tileIdx + 2) * CFG.TILE > S.camX - 120);
+}
+
+function isSolidAt(worldX) {
+  const idx = Math.floor(worldX / CFG.TILE);
+  const local = idx - S.firstTileIdx;
+  if (local < 0 || local >= S.tiles.length) return false;
+  return !!S.tiles[local];
+}
+
+// ============================================================
+// === PHYSICS ================================================
+// ============================================================
+function physicsStep(dt) {
+  if (S.state !== 'playing') return;
+
+  S.prevCamX = S.camX;
+  S.prevCartY = S.cartY;
+
+  S.playTime += dt;
+  S.speed = Math.min(CFG.SPEED_CAP, CFG.SPEED_BASE + S.playTime * CFG.SPEED_RAMP);
+
+  S.camX += S.speed * dt;
+  S.distanceM = S.camX * CFG.M_PER_PX;
+
+  // Input -> buffer
+  if (jumpPressed) {
+    S.jumpBuffer = CFG.JUMP_BUFFER;
+    jumpPressed = false;
+  }
+
+  // Gravity + vertical motion
+  const wasOnRail = S.cartOnRail;
+  S.cartVY += CFG.GRAVITY * dt;
+  S.cartY += S.cartVY * dt;
+
+  const cartWorldX = S.camX + CFG.CART_SCREEN_X;
+  const solidBelow = isSolidAt(cartWorldX);
+
+  if (S.cartVY >= 0 && S.cartY >= CFG.RAIL_Y && solidBelow) {
+    // Landed on solid rail
+    if (!wasOnRail && S.cartVY > 80) {
+      sndLand();
+      for (let i = 0; i < 8; i++) {
+        const sp = 60 + Math.random() * 140;
+        const ang = -Math.PI * (0.15 + Math.random() * 0.7);
+        S.particles.push({
+          x: CFG.CART_SCREEN_X + (Math.random() - 0.5) * 20,
+          y: CFG.RAIL_Y,
+          vx: Math.cos(ang) * sp * 0.5 - 40,
+          vy: Math.sin(ang) * sp * 0.9,
+          life: 0.35 + Math.random() * 0.25,
+          maxLife: 0.6,
+          size: 5 + Math.random() * 3,
+          color: Math.random() < 0.5 ? CFG.C_YELLOW : CFG.C_CYAN,
+          rot: Math.random() * Math.PI,
+          rotV: (Math.random() - 0.5) * 12,
+        });
+      }
+    }
+    S.cartY = CFG.RAIL_Y;
+    S.cartVY = 0;
+    S.cartOnRail = true;
+  } else {
+    if (wasOnRail && S.cartVY >= 0) {
+      // Rolled off an edge — grant coyote window
+      S.coyote = CFG.COYOTE;
+    }
+    S.cartOnRail = false;
+
+    if (S.cartY > CFG.RAIL_Y + 240) {
+      die('fall');
+      return;
+    }
+  }
+
+  S.coyote = Math.max(0, S.coyote - dt);
+  S.jumpBuffer = Math.max(0, S.jumpBuffer - dt);
+
+  // Jump (buffered + coyote)
+  if (S.jumpBuffer > 0 && (S.cartOnRail || S.coyote > 0)) {
+    S.cartVY = -CFG.JUMP_V;
+    S.cartOnRail = false;
+    S.coyote = 0;
+    S.jumpBuffer = 0;
+    sndJump();
+    for (let i = 0; i < 5; i++) {
+      S.particles.push({
+        x: CFG.CART_SCREEN_X - 8,
+        y: CFG.RAIL_Y - 4,
+        vx: -80 - Math.random() * 100,
+        vy: 30 + Math.random() * 70,
+        life: 0.3,
+        maxLife: 0.3,
+        size: 4 + Math.random() * 2,
+        color: CFG.C_CYAN,
+        rot: Math.random() * Math.PI,
+        rotV: (Math.random() - 0.5) * 10,
+      });
+    }
+  }
+
+  // Enemy collisions
+  for (const e of S.enemies) {
+    if (!e.alive) continue;
+    e.bob += dt;
+    const ex = (e.tileIdx + 0.5) * CFG.TILE;
+    const ey = CFG.RAIL_Y - 14;
+    const cx = cartWorldX;
+    const cy = S.cartY - CFG.CART_H * 0.5;
+    if (Math.abs(cx - ex) < 30 && Math.abs(cy - ey) < 22) {
+      die('enemy');
+      return;
+    }
+  }
+
+  // Particles
+  stepParticles(dt, 900);
+
+  // Shake decay
+  if (S.shake > 0) {
+    S.shake *= Math.pow(0.001, dt);
+    if (S.shake < 0.5) S.shake = 0;
+  }
+
+  ensureWorldAhead();
+  cullWorldBehind();
+}
+
+function stepParticles(dt, grav) {
+  for (const p of S.particles) {
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vy += grav * dt;
+    p.rot += p.rotV * dt;
+    p.life -= dt;
+  }
+  S.particles = S.particles.filter(p => p.life > 0);
+}
+
+function die() {
+  if (S.state !== 'playing') return;
+  S.state = 'dying';
+  S.stateTime = 0;
+  S.freezeFrame = CFG.FREEZE_FRAME;
+  S.shake = 18;
+  S.inputLock = CFG.DEATH_LOCKOUT;
+  sndDeath();
+
+  for (let i = 0; i < 32; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const sp = 140 + Math.random() * 260;
+    const colors = [CFG.C_PINK, CFG.C_YELLOW, CFG.C_CYAN, CFG.C_BONE];
+    S.particles.push({
+      x: CFG.CART_SCREEN_X + (Math.random() - 0.5) * 20,
+      y: S.cartY - 22,
+      vx: Math.cos(ang) * sp,
+      vy: Math.sin(ang) * sp - 140,
+      life: 0.7 + Math.random() * 0.5,
+      maxLife: 1.1,
+      size: 5 + Math.random() * 5,
+      color: colors[(Math.random() * colors.length) | 0],
+      rot: Math.random() * Math.PI,
+      rotV: (Math.random() - 0.5) * 14,
+    });
+  }
+
+  const dm = Math.floor(S.distanceM);
+  if (dm > S.best) {
+    S.best = dm;
+    try { localStorage.setItem('railgrind.best', String(dm)); } catch (e) {}
+  }
+}
+
+// ============================================================
+// === STATE TRANSITIONS ======================================
+// ============================================================
+function startGame() {
+  S.state = 'playing';
+  S.stateTime = 0;
+  S.playTime = 0;
+  S.camX = 0; S.prevCamX = 0;
+  S.speed = CFG.SPEED_BASE;
+  S.cartY = CFG.RAIL_Y; S.prevCartY = CFG.RAIL_Y;
+  S.cartVY = 0;
+  S.cartOnRail = true;
+  S.coyote = 0;
+  S.jumpBuffer = 0;
+  S.tiles = [];
+  S.firstTileIdx = 0;
+  S.nextChunkTile = 0;
+  S.enemies = [];
+  S.particles = [];
+  S.distanceM = 0;
+  S.shake = 0;
+  S.lastNonFlat = false;
+  S.chunksSinceFlat = 0;
+  // Comfortable runway
+  pushChunk(20);
+  ensureWorldAhead();
+}
+
+function enterTitle() {
+  S.state = 'title';
+  S.stateTime = 0;
+  S.camX = 0;
+  S.tiles = [];
+  S.firstTileIdx = 0;
+  S.nextChunkTile = 0;
+  S.enemies = [];
+  S.particles = [];
+  S.cartY = CFG.RAIL_Y;
+  S.cartVY = 0;
+  S.cartOnRail = true;
+  S.distanceM = 0;
+  pushChunk(120);  // long flat runway for title scroll
+}
+
+// ============================================================
+// === RENDER HELPERS =========================================
+// ============================================================
+function drawText(text, x, y, size, color, outlineColor, outlineW) {
+  ctx.font = `900 ${size}px "Arial Black", Impact, system-ui, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = outlineW || 4;
+  ctx.strokeStyle = outlineColor || CFG.C_BLACK;
+  ctx.strokeText(text, x, y);
+  ctx.fillStyle = color;
+  ctx.fillText(text, x, y);
+}
+
+function sticker(text, x, y, w, h, rot, bgColor, textColor, fontPx) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rot);
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 3.5;
+  ctx.strokeStyle = CFG.C_BLACK;
+  ctx.fillStyle = bgColor;
+  ctx.fillRect(-w * 0.5, -h * 0.5, w, h);
+  ctx.strokeRect(-w * 0.5, -h * 0.5, w, h);
+  ctx.font = `900 ${fontPx}px "Arial Black", Impact, system-ui, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = textColor;
+  ctx.fillText(text, 0, 2);
+  ctx.restore();
+}
+
+// ============================================================
+// === BACKGROUND (parallax) ==================================
+// ============================================================
+const BG_TAGS = ['RAIL', 'GRIND', 'XXX', 'VOID', '888', 'GO', '→→→', 'FAST', 'RLY?'];
+
+function prng(n) {
+  let x = Math.sin(n * 9301.23 + 49297.13) * 233280;
+  return x - Math.floor(x);
+}
+
+function drawBackground(renderCamX) {
+  // Sky / deep tunnel bands
+  ctx.fillStyle = CFG.C_DARK;
+  ctx.fillRect(0, 0, CFG.W, CFG.H);
+  ctx.fillStyle = CFG.C_SUB;
+  ctx.fillRect(0, 0, CFG.W, 210);
+
+  // Far silhouettes
+  drawSilhouette(renderCamX, 0.12, 260, 70, CFG.C_SUB, 17, false);
+  // Mid silhouettes
+  drawSilhouette(renderCamX, 0.30, 330, 90, CFG.C_MID, 29, true);
+  // Background graffiti tags (mid layer)
+  drawBgTags(renderCamX, 0.24);
+  // Near silhouettes (under rail)
+  drawSilhouette(renderCamX, 0.55, CFG.RAIL_Y + 14, 60, '#0a1420', 41, true);
+}
+
+function drawSilhouette(renderCamX, par, baseY, amp, color, seed, outline) {
+  const offset = renderCamX * par;
+  const step = 140;
+  const startX = -140 - (((offset % step) + step) % step);
+  ctx.fillStyle = color;
+  ctx.strokeStyle = CFG.C_BLACK;
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.moveTo(-40, CFG.H + 20);
+  for (let x = startX; x < CFG.W + step + 40; x += step) {
+    const n = Math.floor((x + offset) / step) + seed;
+    const h1 = baseY - amp * (0.5 + 0.5 * Math.sin(n * 1.37));
+    const h2 = baseY - amp * (0.3 + 0.7 * Math.sin(n * 2.13 + 1.1));
+    ctx.lineTo(x, h1);
+    ctx.lineTo(x + step * 0.5, h2);
+  }
+  ctx.lineTo(CFG.W + 80, CFG.H + 20);
+  ctx.closePath();
+  ctx.fill();
+  if (outline) ctx.stroke();
+}
+
+function drawBgTags(renderCamX, par) {
+  const off = renderCamX * par;
+  const spacing = 360;
+  const start = Math.floor((off - 200) / spacing);
+  const end = Math.floor((off + CFG.W + 200) / spacing);
+  for (let i = start; i <= end; i++) {
+    const x = i * spacing - off;
+    const seed = prng(i * 17.3 + 4.7);
+    if (seed < 0.12) continue;  // skip some
+    const tag = BG_TAGS[(seed * BG_TAGS.length) | 0];
+    const y = 105 + seed * 130;
+    const rot = (seed - 0.5) * 0.45;
+    const size = 42 + (seed * 26) | 0;
+    const hue = prng(i * 11.1 + 2.3);
+    const col = hue < 0.4 ? CFG.C_PINK : hue < 0.75 ? CFG.C_CYAN : CFG.C_YELLOW;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rot);
+    ctx.font = `900 ${size}px Impact, "Arial Black", system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = CFG.C_BLACK;
+    ctx.strokeText(tag, 0, 0);
+    ctx.globalAlpha = 0.55;
+    ctx.fillStyle = col;
+    ctx.fillText(tag, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+}
+
+// ============================================================
+// === RAIL ===================================================
+// ============================================================
+function drawRail(renderCamX) {
+  const firstTile = Math.floor(renderCamX / CFG.TILE) - 1;
+  const lastTile = Math.ceil((renderCamX + CFG.W) / CFG.TILE) + 1;
+
+  // Walk tiles and draw contiguous solid runs
+  let runStart = null;
+  for (let i = firstTile; i <= lastTile + 1; i++) {
+    const local = i - S.firstTileIdx;
+    const solid = local >= 0 && local < S.tiles.length ? S.tiles[local] : false;
+    if (solid && runStart == null) runStart = i;
+    if (!solid && runStart != null) {
+      drawRailSegment(runStart * CFG.TILE - renderCamX, i * CFG.TILE - renderCamX);
+      runStart = null;
+    }
+  }
+}
+
+function drawRailSegment(x1, x2) {
+  const y = CFG.RAIL_Y;
+  const w = x2 - x1;
+
+  // Support pillar (trapezoidal chunk going into darkness)
+  ctx.save();
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = CFG.OUTLINE;
+  ctx.strokeStyle = CFG.C_BLACK;
+  ctx.fillStyle = '#162938';
+  ctx.beginPath();
+  ctx.moveTo(x1, y + 8);
+  ctx.lineTo(x2, y + 8);
+  ctx.lineTo(x2 - 16, CFG.H + 20);
+  ctx.lineTo(x1 + 16, CFG.H + 20);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // Halftone overlay on support
+  ctx.save();
+  ctx.clip();
+  ctx.fillStyle = halftoneDark;
+  ctx.fillRect(x1 - 4, y + 8, w + 8, CFG.H);
+  ctx.restore();
+
+  // Cel-shade band (left underside darker)
+  ctx.fillStyle = 'rgba(10,10,15,0.35)';
+  ctx.beginPath();
+  ctx.moveTo(x1, y + 8);
+  ctx.lineTo(x1 + 18, y + 8);
+  ctx.lineTo(x1 + 30, CFG.H + 20);
+  ctx.lineTo(x1 + 16, CFG.H + 20);
+  ctx.closePath();
+  ctx.fill();
+
+  // Crossties
+  ctx.fillStyle = '#2a3e4e';
+  ctx.strokeStyle = CFG.C_BLACK;
+  ctx.lineWidth = 2;
+  const tieW = 16, tieH = 9, tieSpacing = 32;
+  const camRel = x1;  // already screen coords
+  const worldX1 = x1 + S.camX;
+  const tieOffset = ((worldX1 % tieSpacing) + tieSpacing) % tieSpacing;
+  for (let tx = x1 - tieOffset + 6; tx < x2; tx += tieSpacing) {
+    if (tx + tieW * 0.5 < x1 || tx - tieW * 0.5 > x2) continue;
+    ctx.fillRect(tx - tieW * 0.5, y + 4, tieW, tieH);
+    ctx.strokeRect(tx - tieW * 0.5, y + 4, tieW, tieH);
+  }
+
+  // Top rail strip (highlight)
+  ctx.fillStyle = CFG.C_BONE;
+  ctx.strokeStyle = CFG.C_BLACK;
+  ctx.lineWidth = CFG.OUTLINE;
+  ctx.fillRect(x1, y - 3, w, 5);
+  ctx.strokeRect(x1, y - 3, w, 5);
+
+  // Inner rail accent
+  ctx.fillStyle = CFG.C_CYAN;
+  ctx.fillRect(x1 + 1, y - 1, w - 2, 2);
+
+  ctx.restore();
+}
+
+// ============================================================
+// === ENTITIES (cart, enemy) =================================
+// ============================================================
+function drawCart(renderCartY, onRail) {
+  const x = CFG.CART_SCREEN_X;
+  const y = renderCartY;
+  const bob = onRail ? Math.sin(S.playTime * 24) * 1.5 : 0;
+
+  // Wheels (behind body)
+  drawWheel(x - 18, y + 4);
+  drawWheel(x + 18, y + 4);
+
+  ctx.save();
+  ctx.translate(x, y - CFG.CART_H + bob);
+  const bw = CFG.CART_W, bh = CFG.CART_H;
+
+  // Body (pink)
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = CFG.OUTLINE;
+  ctx.strokeStyle = CFG.C_BLACK;
+  ctx.fillStyle = CFG.C_PINK;
+  ctx.beginPath();
+  ctx.moveTo(-bw * 0.5,     bh - 2);
+  ctx.lineTo(-bw * 0.5 - 5, 8);
+  ctx.lineTo(-bw * 0.5 + 4, -3);
+  ctx.lineTo( bw * 0.5 - 4, -3);
+  ctx.lineTo( bw * 0.5 + 5, 8);
+  ctx.lineTo( bw * 0.5,     bh - 2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // Cel-shade band (left/bottom darker)
+  ctx.fillStyle = 'rgba(10,10,15,0.30)';
+  ctx.beginPath();
+  ctx.moveTo(-bw * 0.5,     bh - 2);
+  ctx.lineTo(-bw * 0.5 - 5, 8);
+  ctx.lineTo(-bw * 0.5 + 4, -3);
+  ctx.lineTo(-bw * 0.5 + 12, -3);
+  ctx.lineTo(-bw * 0.5 + 10, 6);
+  ctx.lineTo(-bw * 0.5 + 10, bh - 2);
+  ctx.closePath();
+  ctx.fill();
+
+  // Halftone on body
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(-bw * 0.5,     bh - 2);
+  ctx.lineTo(-bw * 0.5 - 5, 8);
+  ctx.lineTo(-bw * 0.5 + 4, -3);
+  ctx.lineTo( bw * 0.5 - 4, -3);
+  ctx.lineTo( bw * 0.5 + 5, 8);
+  ctx.lineTo( bw * 0.5,     bh - 2);
+  ctx.closePath();
+  ctx.clip();
+  ctx.fillStyle = halftonePink;
+  ctx.globalAlpha = 0.8;
+  ctx.fillRect(-bw, -bh, bw * 2, bh * 2);
+  ctx.globalAlpha = 1;
+  ctx.restore();
+
+  // Yellow trim along top rim
+  ctx.fillStyle = CFG.C_YELLOW;
+  ctx.strokeStyle = CFG.C_BLACK;
+  ctx.lineWidth = 2.5;
+  ctx.fillRect(-bw * 0.5 + 2, -3, bw - 4, 5);
+  ctx.strokeRect(-bw * 0.5 + 2, -3, bw - 4, 5);
+
+  // Rider head
+  ctx.fillStyle = CFG.C_BONE;
+  ctx.lineWidth = CFG.OUTLINE;
+  ctx.strokeStyle = CFG.C_BLACK;
+  ctx.beginPath();
+  ctx.arc(0, -11, 9, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // Goggles
+  ctx.fillStyle = CFG.C_BLACK;
+  ctx.fillRect(-9, -14, 18, 5);
+  ctx.fillStyle = CFG.C_CYAN;
+  ctx.fillRect(-7, -13, 5, 2);
+  ctx.fillRect( 2, -13, 5, 2);
+
+  // Little antenna flag
+  ctx.strokeStyle = CFG.C_BLACK;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(6, -19);
+  ctx.lineTo(10, -26);
+  ctx.stroke();
+  ctx.fillStyle = CFG.C_PINK;
+  ctx.beginPath();
+  ctx.moveTo(10, -26); ctx.lineTo(16, -25); ctx.lineTo(10, -22);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.restore();
+
+  // Speed lines when moving fast
+  if (S.speed > CFG.SPEED_BASE + 10 && onRail) {
+    ctx.strokeStyle = CFG.C_YELLOW;
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 4; i++) {
+      const phase = (S.playTime * 600 + i * 35) % 60;
+      const lx = x - 40 - i * 16 - phase * 0.3;
+      const ly = y - 16 - i * 9;
+      ctx.beginPath();
+      ctx.moveTo(lx, ly);
+      ctx.lineTo(lx - 18, ly);
+      ctx.stroke();
+    }
+  }
+}
+
+function drawWheel(x, y) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate((S.camX / 14) % (Math.PI * 2));
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = CFG.OUTLINE;
+  ctx.strokeStyle = CFG.C_BLACK;
+
+  // Tire
+  ctx.fillStyle = CFG.C_BLACK;
+  ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI * 2); ctx.fill();
+
+  // Hub
+  ctx.fillStyle = CFG.C_YELLOW;
+  ctx.beginPath(); ctx.arc(0, 0, 7.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+
+  // Spokes
+  ctx.strokeStyle = CFG.C_BLACK;
+  ctx.lineWidth = 2.2;
+  ctx.beginPath();
+  ctx.moveTo(-7, 0); ctx.lineTo(7, 0);
+  ctx.moveTo(0, -7); ctx.lineTo(0, 7);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawEnemies(renderCamX) {
+  for (const e of S.enemies) {
+    const wx = (e.tileIdx + 0.5) * CFG.TILE;
+    const sx = wx - renderCamX;
+    if (sx < -60 || sx > CFG.W + 60) continue;
+
+    const y = CFG.RAIL_Y - 14 + Math.sin(e.bob * 4) * 2;
+    ctx.save();
+    ctx.translate(sx, y);
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = CFG.OUTLINE;
+    ctx.strokeStyle = CFG.C_BLACK;
+
+    // Spikes
+    ctx.fillStyle = CFG.C_BLACK;
+    for (let i = -2; i <= 2; i++) {
+      ctx.beginPath();
+      ctx.moveTo(i * 7 - 4, -3);
+      ctx.lineTo(i * 7, -17);
+      ctx.lineTo(i * 7 + 4, -3);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    // Body (pink ellipse)
+    ctx.fillStyle = CFG.C_PINK;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 19, 14, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Cel shade underside
+    ctx.fillStyle = 'rgba(10,10,15,0.35)';
+    ctx.beginPath();
+    ctx.ellipse(-2, 4, 16, 9, 0, 0, Math.PI);
+    ctx.fill();
+
+    // Eye
+    ctx.fillStyle = CFG.C_YELLOW;
+    ctx.beginPath();
+    ctx.arc(3, -2, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = CFG.C_BLACK;
+    ctx.beginPath();
+    ctx.arc(4 + Math.sin(e.bob * 1.3) * 1.5, -2, 2.7, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Little feet
+    ctx.fillStyle = CFG.C_BLACK;
+    ctx.fillRect(-11, 11, 6, 5);
+    ctx.fillRect(  5, 11, 6, 5);
+
+    ctx.restore();
+  }
+}
+
+// ============================================================
+// === PARTICLES ==============================================
+// ============================================================
+function drawParticles() {
+  for (const p of S.particles) {
+    const a = Math.min(1, p.life / (p.maxLife || 0.5));
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(p.rot);
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = CFG.C_BLACK;
+    ctx.globalAlpha = a;
+    ctx.fillStyle = p.color;
+    // chunky diamond/square alternation
+    const s = p.size;
+    if ((p.color === CFG.C_YELLOW) || (p.color === CFG.C_CYAN)) {
+      // diamond
+      ctx.beginPath();
+      ctx.moveTo(0, -s * 0.6);
+      ctx.lineTo(s * 0.6, 0);
+      ctx.lineTo(0, s * 0.6);
+      ctx.lineTo(-s * 0.6, 0);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    } else {
+      ctx.fillRect(-s * 0.5, -s * 0.5, s, s);
+      ctx.strokeRect(-s * 0.5, -s * 0.5, s, s);
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+}
+
+// ============================================================
+// === HUD ====================================================
+// ============================================================
+function drawHUD() {
+  const dm = Math.max(0, Math.floor(S.distanceM));
+  const distStr = String(dm).padStart(4, '0') + ' M';
+  sticker(distStr, 100, 44, 160, 48, -0.04, CFG.C_BONE, CFG.C_BLACK, 26);
+
+  const bestStr = 'BEST ' + String(S.best).padStart(4, '0');
+  sticker(bestStr, CFG.W - 108, 40, 180, 34, 0.05, CFG.C_YELLOW, CFG.C_BLACK, 18);
+}
+
+function drawTitleOverlay() {
+  // Big RAILGRIND tag, slight tilt + bob
+  const bob = Math.sin(S.titleBob) * 4;
+  ctx.save();
+  ctx.translate(CFG.W * 0.5, 170 + bob);
+  ctx.rotate(-0.035);
+
+  // Back shadow tag (offset pink)
+  drawText('RAILGRIND', 5, 6, 112, CFG.C_PINK, CFG.C_BLACK, 11);
+  // Front tag
+  drawText('RAILGRIND', 0, 0, 112, CFG.C_BONE, CFG.C_BLACK, 11);
+  ctx.restore();
+
+  // Subtitle ribbon
+  const pulse = 0.8 + 0.2 * Math.sin(S.titleBob * 2);
+  ctx.globalAlpha = pulse;
+  sticker('SPACE / TAP TO GRIND', CFG.W * 0.5, 265, 360, 50, 0.03, CFG.C_CYAN, CFG.C_BLACK, 26);
+  ctx.globalAlpha = 1;
+
+  // Best
+  if (S.best > 0) {
+    drawText('BEST  ' + String(S.best).padStart(4, '0') + ' M', CFG.W * 0.5, 320, 22, CFG.C_YELLOW, CFG.C_BLACK, 4);
+  }
+
+  // Footer hint
+  drawText('M  MUTE   ·   ARROW / W / SPACE / TAP  JUMP', CFG.W * 0.5, CFG.H - 26, 14, CFG.C_BONE, CFG.C_BLACK, 3);
+}
+
+function drawGameOverOverlay() {
+  // dark wash
+  ctx.fillStyle = 'rgba(10,10,15,0.55)';
+  ctx.fillRect(0, 0, CFG.W, CFG.H);
+
+  // WIPEOUT sticker — pop in
+  const t = Math.min(1, S.stateTime / 0.35);
+  const scl = 0.55 + t * 0.5;
+  ctx.save();
+  ctx.translate(CFG.W * 0.5, CFG.H * 0.5 - 30);
+  ctx.rotate(-0.07);
+  ctx.scale(scl, scl);
+  sticker('WIPEOUT', 0, 0, 420, 112, 0, CFG.C_PINK, CFG.C_BONE, 72);
+  ctx.restore();
+
+  drawText(String(Math.floor(S.distanceM)).padStart(4, '0') + ' M',
+    CFG.W * 0.5, CFG.H * 0.5 + 56, 42, CFG.C_YELLOW, CFG.C_BLACK, 5);
+
+  if (Math.floor(S.distanceM) >= S.best && S.best > 0) {
+    drawText('NEW BEST', CFG.W * 0.5, CFG.H * 0.5 + 98, 22, CFG.C_CYAN, CFG.C_BLACK, 4);
+  } else {
+    drawText('best  ' + S.best + ' m', CFG.W * 0.5, CFG.H * 0.5 + 98, 18, CFG.C_BONE, CFG.C_BLACK, 3);
+  }
+
+  if (S.inputLock <= 0) {
+    const pulse = 0.55 + 0.45 * Math.sin(S.stateTime * 5);
+    ctx.globalAlpha = pulse;
+    drawText('SPACE TO RUN IT BACK', CFG.W * 0.5, CFG.H - 80, 26, CFG.C_BONE, CFG.C_BLACK, 4);
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawMutedIndicator() {
+  if (!S.muted) return;
+  ctx.fillStyle = 'rgba(245,241,232,0.45)';
+  ctx.font = '700 13px system-ui, sans-serif';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'bottom';
+  ctx.fillText('MUTED · M', CFG.W - 10, CFG.H - 8);
+}
+
+// ============================================================
+// === LOOP ===================================================
+// ============================================================
+let acc = 0;
+let lastT = performance.now();
+
+function frame(now) {
+  let dt = (now - lastT) / 1000;
+  lastT = now;
+  if (dt > 0.1) dt = 0.1;
+
+  S.titleBob += dt * 3;
+
+  // State-specific updates
+  if (S.state === 'title') {
+    S.camX += CFG.SPEED_BASE * 0.8 * dt;
+    S.prevCamX = S.camX;
+    ensureWorldAhead();
+    cullWorldBehind();
+    if (jumpPressed) {
+      jumpPressed = false;
+      startGame();
+    }
+  } else if (S.state === 'playing') {
+    acc += dt;
+    let steps = 0;
+    while (acc >= CFG.STEP && steps < 6) {
+      physicsStep(CFG.STEP);
+      acc -= CFG.STEP;
+      steps++;
+      if (S.state !== 'playing') break;
+    }
+  } else if (S.state === 'dying') {
+    S.stateTime += dt;
+    S.freezeFrame = Math.max(0, S.freezeFrame - dt);
+    if (S.freezeFrame <= 0) {
+      stepParticles(dt, 900);
+    }
+    if (S.shake > 0) {
+      S.shake *= Math.pow(0.001, dt);
+      if (S.shake < 0.5) S.shake = 0;
+    }
+    // consume inputs during death
+    jumpPressed = false;
+    if (S.stateTime > CFG.DYING_DURATION) {
+      S.state = 'over';
+      S.stateTime = 0;
+    }
+  } else if (S.state === 'over') {
+    S.stateTime += dt;
+    S.inputLock = Math.max(0, S.inputLock - dt);
+    stepParticles(dt, 900);
+    if (S.inputLock > 0) {
+      jumpPressed = false;
+    } else if (jumpPressed) {
+      jumpPressed = false;
+      startGame();
+      return requestAnimationFrame(frame);
+    }
+  }
+
+  // Compute interpolated render values
+  let renderCamX = S.camX, renderCartY = S.cartY;
+  if (S.state === 'playing') {
+    const alpha = Math.min(1, acc / CFG.STEP);
+    renderCamX = S.prevCamX + (S.camX - S.prevCamX) * alpha;
+    renderCartY = S.prevCartY + (S.cartY - S.prevCartY) * alpha;
+  }
+
+  // Render
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = CFG.C_BLACK;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const k = dpr * viewScale;
+  const sx = S.shake > 0 ? (Math.random() - 0.5) * S.shake : 0;
+  const sy = S.shake > 0 ? (Math.random() - 0.5) * S.shake : 0;
+  ctx.setTransform(k, 0, 0, k, dpr * offsetX + sx * k, dpr * offsetY + sy * k);
+
+  if (S.state === 'title') {
+    drawBackground(renderCamX);
+    drawRailFor(renderCamX);
+    drawCart(CFG.RAIL_Y, true);
+    drawTitleOverlay();
+    drawMutedIndicator();
+  } else if (S.state === 'playing') {
+    drawBackground(renderCamX);
+    drawRailFor(renderCamX);
+    drawEnemies(renderCamX);
+    drawCart(renderCartY, S.cartOnRail);
+    drawParticles();
+    drawHUD();
+    drawMutedIndicator();
+  } else if (S.state === 'dying') {
+    drawBackground(renderCamX);
+    drawRailFor(renderCamX);
+    drawEnemies(renderCamX);
+    // cart only visible during freeze frame
+    if (S.freezeFrame > 0) drawCart(renderCartY, false);
+    drawParticles();
+    drawHUD();
+    drawMutedIndicator();
+  } else if (S.state === 'over') {
+    drawBackground(renderCamX);
+    drawRailFor(renderCamX);
+    drawEnemies(renderCamX);
+    drawParticles();
+    drawHUD();
+    drawGameOverOverlay();
+    drawMutedIndicator();
+  }
+
+  requestAnimationFrame(frame);
+}
+
+// Thin wrapper so earlier section isn't called before paint
+function drawRailFor(camX) { drawRail(camX); }
+
+// ============================================================
+// === BOOT ===================================================
+// ============================================================
+initPatterns();
+enterTitle();
+requestAnimationFrame(frame);
+
+// Silently log to help debug but never throw
+window.addEventListener('error', e => { /* no console errors by design */ });
+
+})();
+</script>
+</body>
+</html>
