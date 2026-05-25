@@ -1,0 +1,1534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAILGRIND · LEVEL EDITOR</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0a0a10;color:#E6D9C0;
+    font-family:system-ui,sans-serif;font-size:12px;user-select:none;-webkit-user-select:none}
+  #app{display:flex;width:100%;height:100%}
+  #canvas-wrap{flex:1;position:relative;background:#050510;overflow:hidden}
+  #editor{display:block;width:100%;height:100%;cursor:crosshair}
+  #editor.panning{cursor:grabbing}
+  #editor.selecting{cursor:default}
+  #sidebar{width:300px;background:#121018;border-left:1px solid #252030;
+    display:flex;flex-direction:column;overflow-y:auto}
+  .panel{padding:12px;border-bottom:1px solid #252030}
+  .panel h2{font-size:10px;color:#9B7BFF;text-transform:uppercase;letter-spacing:1.5px;
+    margin-bottom:8px;font-weight:900}
+  .row{display:flex;gap:6px;margin-bottom:6px;align-items:center}
+  button{background:#221B30;color:#E6D9C0;border:1px solid #3A3050;
+    padding:6px 10px;cursor:pointer;border-radius:3px;font-family:inherit;font-size:11px;
+    transition:background 0.1s}
+  button:hover{background:#2C2340}
+  button.active{background:#9B7BFF;color:#0a0a10;border-color:#B19FFF;font-weight:700}
+  button.danger{background:#3A1818;border-color:#7A3030}
+  button.danger:hover{background:#5A2020}
+  button.primary{background:#2A4A30;border-color:#50A070}
+  button.primary:hover{background:#3A6040}
+  button.wide{flex:1}
+  input[type=text],input[type=color],select,textarea{
+    background:#0A080E;color:#E6D9C0;border:1px solid #3A3050;
+    padding:5px 7px;border-radius:3px;font-family:inherit;font-size:11px;width:100%;outline:none}
+  input:focus,select:focus,textarea:focus{border-color:#9B7BFF}
+  input[type=color]{padding:2px;height:28px;cursor:pointer}
+  textarea{font-family:'Courier New',monospace;font-size:10px;resize:vertical;height:140px;line-height:1.3}
+  label{display:block;margin-bottom:6px;font-size:10px;
+    color:#998B70;text-transform:uppercase;letter-spacing:0.5px}
+  label span{display:block;margin-bottom:3px}
+  .tool-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:6px}
+  .help{font-size:10px;color:#7A7060;line-height:1.5;margin-top:6px}
+  .help kbd{background:#221B30;border:1px solid #3A3050;border-radius:2px;padding:0 4px;
+    font-family:inherit;font-size:10px;color:#E6D9C0}
+  .sel-info{background:#0A080E;padding:8px;border-radius:3px;font-size:11px;
+    font-family:'Courier New',monospace;color:#FFB040;line-height:1.5;min-height:20px}
+  #statusbar{position:absolute;bottom:10px;left:10px;background:rgba(0,0,0,0.7);
+    padding:6px 10px;border-radius:3px;font-size:11px;color:#E6D9C0;pointer-events:none;
+    font-family:'Courier New',monospace}
+  #statusbar .key{color:#9B7BFF}
+  #topbar{position:absolute;top:10px;left:10px;background:rgba(0,0,0,0.7);
+    padding:6px 12px;border-radius:3px;font-size:12px;color:#FFB040;pointer-events:none;
+    font-weight:900;letter-spacing:1px}
+  .hdr{font-weight:900;color:#FFB040;font-size:14px;letter-spacing:2px;margin-bottom:4px;
+    text-align:center;padding-bottom:8px;border-bottom:1px solid #3A3050}
+  .subtle{color:#7A7060;font-size:10px;text-align:center;margin-bottom:8px}
+  .coord{color:#6DFFEC;font-family:'Courier New',monospace}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="canvas-wrap">
+    <canvas id="editor"></canvas>
+    <div id="topbar">RAILGRIND · LEVEL EDITOR</div>
+    <div id="statusbar"></div>
+  </div>
+  <div id="sidebar">
+    <div class="panel">
+      <div class="hdr">NINE CIRCLES</div>
+      <div class="subtle">layer editor</div>
+      <div class="row">
+        <button id="prev-layer" title="Previous layer [">◀</button>
+        <select id="layer-select" style="flex:1"></select>
+        <button id="next-layer" title="Next layer ]">▶</button>
+      </div>
+      <label><span>Name</span><input id="layer-name" type="text"></label>
+      <label><span>Background Tint</span><input id="layer-tint" type="color"></label>
+    </div>
+
+    <div class="panel">
+      <h2>Tools</h2>
+      <div class="tool-grid">
+        <button id="tool-select" class="active" title="Select & move [S]">SELECT</button>
+        <button id="tool-rail" title="Create rail [R]">RAIL</button>
+        <button id="tool-portal" title="Place portal [P]">PORTAL</button>
+        <button id="tool-finish" title="Place finish [F]">FINISH</button>
+      </div>
+      <div class="row">
+        <label style="flex:1;margin:0"><span>Grid</span>
+          <select id="grid-size">
+            <option value="10">10 px</option>
+            <option value="20" selected>20 px</option>
+            <option value="40">40 px</option>
+            <option value="80">80 px</option>
+          </select>
+        </label>
+        <label style="margin:0;padding-top:14px">
+          <input type="checkbox" id="snap-toggle" checked> Snap
+        </label>
+      </div>
+      <div class="help">
+        <kbd>S</kbd>/<kbd>R</kbd>/<kbd>P</kbd>/<kbd>F</kbd> tools &nbsp;
+        <kbd>[</kbd>/<kbd>]</kbd> layer<br>
+        <kbd>Del</kbd> delete &nbsp; <kbd>Arrows</kbd> nudge &nbsp; <kbd>Esc</kbd> deselect<br>
+        Wheel zoom · Middle-drag or <kbd>Space</kbd>+drag to pan
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Selection</h2>
+      <div id="selection-info" class="sel-info">Nothing selected</div>
+      <div class="row" style="margin-top:8px">
+        <button id="delete-btn" class="danger wide">Delete</button>
+        <button id="duplicate-btn" class="wide">Duplicate</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Hazard</h2>
+      <div class="row" style="margin-bottom:8px">
+        <label style="flex:1;margin:0"><span>Type</span>
+          <select id="hazard-type">
+            <option value="">(none)</option>
+            <option value="treachery">treachery — phantom rails</option>
+            <option value="fraud">fraud — crumbling rails</option>
+            <option value="violence">violence — spike-rain</option>
+            <option value="heresy">heresy — creeping fire</option>
+            <option value="wrath">wrath — rising tide</option>
+            <option value="greed">greed — coin limit</option>
+            <option value="gluttony">gluttony — slush</option>
+            <option value="lust">lust — wind</option>
+            <option value="limbo">limbo — bell at apex</option>
+          </select>
+        </label>
+      </div>
+      <div id="hazard-fields"></div>
+      <div class="help" id="hazard-help"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Test Play</h2>
+      <div class="row">
+        <button id="testplay-btn" class="primary wide">▶ Play in game</button>
+      </div>
+      <div class="row">
+        <button id="clear-override-btn" class="wide">Clear saved level</button>
+      </div>
+      <div class="help">"Play in game" saves to localStorage and opens railgrind.html in a new tab. The game will use these layers until you clear.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Import / Export</h2>
+      <div class="row">
+        <button id="export-btn" class="wide">Export →</button>
+        <button id="import-btn" class="wide">← Import</button>
+      </div>
+      <textarea id="json-area" spellcheck="false" placeholder="Paste a LAYERS array here to import, or click Export to fill this with the current state."></textarea>
+      <div class="help">The export format is ready to paste over the LAYERS array in railgrind.html.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Reset</h2>
+      <button id="reset-btn" class="danger" style="width:100%">Reset to built-in defaults</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+// ============================================================
+// DEFAULT LAYERS — mirrors railgrind.html
+// ============================================================
+const DEFAULT_LAYERS = [
+  { name: 'TREACHERY', tint: '#1A2A3A',
+    rails: [[0,520,360,360],[620,960,350,360],[1060,1380,360,340],[1480,1780,330,330],[1880,2360,340,330]],
+    portal: [2320, 330],
+    hazard: { type: 'treachery', traitors: [1, 3] } },
+  { name: 'FRAUD', tint: '#2A1A30',
+    rails: [[0,380,380,380],[460,700,360,340],[580,860,230,230],[800,1080,380,380],[960,1260,240,240],[1180,1440,370,360],[1540,1780,350,330],[1880,2120,330,320],[2220,2360,320,320]],
+    portal: [2320, 320],
+    hazard: { type: 'fraud', crumbleDelay: 0.42 } },
+  { name: 'VIOLENCE', tint: '#3A1818',
+    rails: [[0,240,360,360],[320,500,350,350],[580,740,340,340],[820,980,340,340],[1060,1220,330,330],[1300,1460,330,330],[1540,1720,320,320],[1800,1980,320,320],[2060,2240,320,320],[2280,2360,320,320]],
+    portal: [2320, 320],
+    hazard: { type: 'violence', telegraph: 0.55, period: 1.9,
+      columns: [ { x: 260, phase: 0 }, { x: 620, phase: 0.6 }, { x: 980, phase: 1.2 },
+                 { x: 1340, phase: 0.3 }, { x: 1700, phase: 0.9 }, { x: 2040, phase: 1.5 } ] } },
+  { name: 'HERESY', tint: '#1F2A18',
+    rails: [[0,280,380,340],[360,540,330,370],[620,820,370,320],[900,1080,320,360],[1160,1360,360,300],[1440,1640,310,350],[1720,1900,340,290],[1980,2180,300,340],[2260,2360,320,310]],
+    portal: [2320, 310],
+    hazard: { type: 'heresy', spreadRate: 140 } },
+  { name: 'WRATH', tint: '#3A2410',
+    rails: [[0,340,360,380],[540,700,360,340],[900,1060,330,340],[1240,1400,320,310],[1580,1740,310,300],[1920,2100,310,320],[2260,2360,330,340]],
+    portal: [2320, 340],
+    hazard: { type: 'wrath', riseRate: 72, startDelay: 0.6 } },
+  { name: 'GREED', tint: '#2A240A',
+    rails: [[0,320,420,420],[400,600,400,380],[680,880,360,340],[960,1160,320,300],[1240,1440,280,260],[1520,1720,240,240],[1820,2020,250,280],[2120,2360,300,330]],
+    portal: [2320, 330],
+    hazard: { type: 'greed', limit: 3,
+      coins: [ {x:140,y:390},{x:250,y:390},{x:500,y:370},{x:560,y:365},
+               {x:760,y:330},{x:820,y:325},{x:1040,y:295},{x:1110,y:290},
+               {x:1320,y:255},{x:1400,y:245},{x:1600,y:215},{x:1680,y:215},
+               {x:1900,y:230},{x:1980,y:250},{x:2200,y:290},{x:2280,y:310} ] } },
+  { name: 'GLUTTONY', tint: '#1A2A2A',
+    rails: [[0,400,370,370],[260,580,220,220],[480,820,370,370],[720,1060,230,230],[900,1240,370,370],[1320,1580,360,350],[1660,1900,340,330],[1980,2180,330,320],[2260,2360,320,320]],
+    portal: [2320, 320],
+    hazard: { type: 'gluttony', slowDur: 1.3, slowFactor: 0.45,
+      slush: [ {railIdx:0,t0:0.55,t1:0.95}, {railIdx:1,t0:0.20,t1:0.80},
+               {railIdx:3,t0:0.30,t1:0.90}, {railIdx:4,t0:0.10,t1:0.50},
+               {railIdx:6,t0:0.30,t1:0.70} ] } },
+  { name: 'LUST', tint: '#2A1030',
+    rails: [[0,260,360,340],[340,540,310,290],[620,820,280,280],[900,1100,290,310],[1180,1380,300,280],[1460,1660,280,260],[1740,1940,260,270],[2020,2220,280,300],[2300,2360,310,310]],
+    portal: [2320, 310],
+    hazard: { type: 'lust', period: 2.8, amplitude: 140 } },
+  { name: 'LIMBO', tint: '#151A2A',
+    rails: [[0,600,340,330],[720,1180,330,320],[1320,1800,320,320],[1900,2380,320,320]],
+    finish: [2320, 320],
+    hazard: { type: 'limbo', bell: { x: 2440, y: 220, tolerance: 34, minSpeed: 440 } } },
+];
+
+const LAYER_W = 2400;
+const LAYER_H = 620;
+const STORAGE_KEY = 'railgrind.editorLevels';
+const SESSION_KEY = 'railgrind.editorSession';
+
+// ============================================================
+// STATE
+// ============================================================
+const E = {
+  layers: clone(DEFAULT_LAYERS),
+  currentLayerIdx: 0,
+  tool: 'select',
+  selected: null,
+  zoom: 0.55,
+  panX: 40,
+  panY: 40,
+  gridSize: 20,
+  snap: true,
+  dragState: null,
+  spacePressed: false,
+  mouseX: 0, mouseY: 0,
+};
+
+function clone(x) { return JSON.parse(JSON.stringify(x)); }
+
+// Restore prior session if present
+try {
+  const saved = localStorage.getItem(SESSION_KEY);
+  if (saved) {
+    const parsed = JSON.parse(saved);
+    if (Array.isArray(parsed) && parsed.length === 9) E.layers = parsed;
+  }
+} catch (e) {}
+
+function persistSession() {
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify(E.layers)); } catch (e) {}
+}
+
+// ============================================================
+// DOM REFS
+// ============================================================
+const canvas = document.getElementById('editor');
+const ctx = canvas.getContext('2d');
+const layerSelect = document.getElementById('layer-select');
+const layerName = document.getElementById('layer-name');
+const layerTint = document.getElementById('layer-tint');
+const jsonArea = document.getElementById('json-area');
+const statusbar = document.getElementById('statusbar');
+const selectionInfo = document.getElementById('selection-info');
+const gridSizeSelect = document.getElementById('grid-size');
+const snapToggle = document.getElementById('snap-toggle');
+
+function resize() {
+  const wrap = canvas.parentElement;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  canvas.width = wrap.clientWidth * dpr;
+  canvas.height = wrap.clientHeight * dpr;
+  canvas.style.width = wrap.clientWidth + 'px';
+  canvas.style.height = wrap.clientHeight + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ============================================================
+// COORDS
+// ============================================================
+function worldToScreen(wx, wy) {
+  return [wx * E.zoom + E.panX, wy * E.zoom + E.panY];
+}
+function screenToWorld(sx, sy) {
+  return [(sx - E.panX) / E.zoom, (sy - E.panY) / E.zoom];
+}
+function snapValue(v) {
+  if (!E.snap) return Math.round(v);
+  return Math.round(v / E.gridSize) * E.gridSize;
+}
+function currentLayer() { return E.layers[E.currentLayerIdx]; }
+
+function fitView() {
+  const wrap = canvas.parentElement;
+  const w = wrap.clientWidth, h = wrap.clientHeight;
+  const zx = (w - 80) / LAYER_W;
+  const zy = (h - 80) / LAYER_H;
+  E.zoom = Math.min(zx, zy);
+  E.panX = (w - LAYER_W * E.zoom) / 2;
+  E.panY = (h - LAYER_H * E.zoom) / 2;
+}
+fitView();
+
+// ============================================================
+// RENDER
+// ============================================================
+function draw() {
+  const w = canvas.width, h = canvas.height;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const sw = w / dpr, sh = h / dpr;
+
+  ctx.fillStyle = '#050510';
+  ctx.fillRect(0, 0, sw, sh);
+
+  drawLayerBackdrop();
+  drawGrid();
+  drawLayerBounds();
+
+  const L = currentLayer();
+  // Neighbor layer previews (context)
+  drawNeighborGhosts();
+
+  // Rails
+  for (let i = 0; i < L.rails.length; i++) drawRailInEditor(L.rails[i], i);
+  // Hazard visuals layered over rails
+  if (L.hazard) drawHazardInEditor(L.hazard, L);
+  // Portal
+  if (L.portal) drawPortalInEditor(L.portal);
+  // Finish
+  if (L.finish) drawFinishInEditor(L.finish);
+
+  // Spawn indicator (layer 0 only)
+  drawSpawnIndicator();
+
+  // Pit & exit hints
+  drawPitAndExitHints();
+
+  // Cursor crosshair when placing
+  drawCursorHint();
+
+  // Status bar
+  const [cwx, cwy] = screenToWorld(E.mouseX, E.mouseY);
+  statusbar.innerHTML = `
+    <span class="key">Circle</span> ${E.currentLayerIdx+1}/9 — ${L.name}
+    &nbsp; <span class="key">Tool</span> ${E.tool.toUpperCase()}
+    &nbsp; <span class="key">Zoom</span> ${E.zoom.toFixed(2)}x
+    &nbsp; <span class="key">Cursor</span> ${Math.round(cwx)}, ${Math.round(cwy)}
+  `;
+}
+
+function drawLayerBackdrop() {
+  const L = currentLayer();
+  const [x0, y0] = worldToScreen(0, 0);
+  const [x1, y1] = worldToScreen(LAYER_W, LAYER_H);
+  ctx.fillStyle = L.tint;
+  ctx.globalAlpha = 0.5;
+  ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+  ctx.globalAlpha = 1;
+  // Top fade
+  const g = ctx.createLinearGradient(0, y0, 0, y0 + 80);
+  g.addColorStop(0, 'rgba(0,0,0,0.5)');
+  g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(x0, y0, x1 - x0, 80);
+}
+
+function drawLayerBounds() {
+  const [x0, y0] = worldToScreen(0, 0);
+  const [x1, y1] = worldToScreen(LAYER_W, LAYER_H);
+  ctx.strokeStyle = '#3A3050';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+
+  // Labels
+  ctx.fillStyle = '#7A7060';
+  ctx.font = '10px "Courier New", monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('0,0', x0 + 4, y0 + 12);
+  ctx.textAlign = 'right';
+  ctx.fillText(LAYER_W + ',' + LAYER_H, x1 - 4, y1 - 4);
+}
+
+function drawGrid() {
+  if (E.zoom < 0.2) return;
+  const [wx0, wy0] = screenToWorld(0, 0);
+  const [wx1, wy1] = screenToWorld(canvas.clientWidth, canvas.clientHeight);
+  const g = E.gridSize;
+
+  // Minor grid
+  ctx.strokeStyle = '#15111F';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  const startX = Math.floor(wx0 / g) * g;
+  const endX = Math.ceil(wx1 / g) * g;
+  const startY = Math.floor(wy0 / g) * g;
+  const endY = Math.ceil(wy1 / g) * g;
+  for (let x = startX; x <= endX; x += g) {
+    const sx = x * E.zoom + E.panX;
+    ctx.moveTo(sx + 0.5, 0);
+    ctx.lineTo(sx + 0.5, canvas.clientHeight);
+  }
+  for (let y = startY; y <= endY; y += g) {
+    const sy = y * E.zoom + E.panY;
+    ctx.moveTo(0, sy + 0.5);
+    ctx.lineTo(canvas.clientWidth, sy + 0.5);
+  }
+  ctx.stroke();
+
+  // Major grid every 100
+  ctx.strokeStyle = '#241E38';
+  ctx.beginPath();
+  const gM = 100;
+  const startXM = Math.floor(wx0 / gM) * gM;
+  const endXM = Math.ceil(wx1 / gM) * gM;
+  const startYM = Math.floor(wy0 / gM) * gM;
+  const endYM = Math.ceil(wy1 / gM) * gM;
+  for (let x = startXM; x <= endXM; x += gM) {
+    const sx = x * E.zoom + E.panX;
+    ctx.moveTo(sx + 0.5, 0);
+    ctx.lineTo(sx + 0.5, canvas.clientHeight);
+  }
+  for (let y = startYM; y <= endYM; y += gM) {
+    const sy = y * E.zoom + E.panY;
+    ctx.moveTo(0, sy + 0.5);
+    ctx.lineTo(canvas.clientWidth, sy + 0.5);
+  }
+  ctx.stroke();
+}
+
+function drawNeighborGhosts() {
+  const alpha = 0.22;
+  const idx = E.currentLayerIdx;
+  // Below (lower layer) previewed at y > LAYER_H
+  if (idx > 0) {
+    const below = E.layers[idx - 1];
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    for (const r of below.rails) {
+      const [x1, y1] = worldToScreen(r[0], r[2] + LAYER_H);
+      const [x2, y2] = worldToScreen(r[1], r[3] + LAYER_H);
+      ctx.strokeStyle = '#7A6B5A';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    }
+    ctx.restore();
+    ctx.fillStyle = 'rgba(122,107,90,0.6)';
+    ctx.font = '11px system-ui';
+    const [lx, ly] = worldToScreen(8, LAYER_H + 14);
+    ctx.fillText('↓ ' + below.name + ' (below)', lx, ly);
+  }
+  // Above (higher layer) previewed at y < 0
+  if (idx < 8) {
+    const above = E.layers[idx + 1];
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    for (const r of above.rails) {
+      const [x1, y1] = worldToScreen(r[0], r[2] - LAYER_H);
+      const [x2, y2] = worldToScreen(r[1], r[3] - LAYER_H);
+      ctx.strokeStyle = '#7A6B5A';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    }
+    ctx.restore();
+    ctx.fillStyle = 'rgba(122,107,90,0.6)';
+    ctx.font = '11px system-ui';
+    const [lx, ly] = worldToScreen(8, -LAYER_H + 14);
+    ctx.fillText('↑ ' + above.name + ' (above)', lx, ly);
+  }
+}
+
+function drawRailInEditor(rail, idx) {
+  const [x1, y1] = worldToScreen(rail[0], rail[2]);
+  const [x2, y2] = worldToScreen(rail[1], rail[3]);
+  const sel = E.selected && E.selected.type === 'rail' && E.selected.idx === idx;
+
+  // Wood plank underneath
+  ctx.strokeStyle = '#3E2A1B';
+  ctx.lineWidth = Math.max(6, 12 * E.zoom);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(x1, y1 + 4 * E.zoom);
+  ctx.lineTo(x2, y2 + 4 * E.zoom);
+  ctx.stroke();
+
+  // Iron rail on top
+  ctx.strokeStyle = sel ? '#FFB040' : '#B0A190';
+  ctx.lineWidth = Math.max(3, 5 * E.zoom);
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+
+  // Endpoints
+  const hr = sel ? 7 : 5;
+  ctx.strokeStyle = '#0A080E';
+  ctx.lineWidth = 1.5;
+  for (const [hx, hy] of [[x1, y1], [x2, y2]]) {
+    ctx.fillStyle = sel ? '#FFB040' : '#D8C8A8';
+    ctx.beginPath();
+    ctx.arc(hx, hy, hr, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  // Label
+  if (sel || E.zoom > 0.7) {
+    ctx.fillStyle = sel ? '#FFB040' : '#7A7060';
+    ctx.font = 'bold 10px "Courier New", monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('#' + idx, (x1 + x2) / 2, Math.min(y1, y2) - 8);
+  }
+}
+
+function drawPortalInEditor(portal) {
+  const [sx, sy] = worldToScreen(portal[0], portal[1]);
+  const sel = E.selected && E.selected.type === 'portal';
+  const r = Math.max(20, 36 * E.zoom);
+  const cy = sy - 10 * E.zoom;
+
+  // Beam
+  const g = ctx.createLinearGradient(sx, cy - 240 * E.zoom, sx, cy);
+  g.addColorStop(0, 'rgba(155,123,255,0)');
+  g.addColorStop(1, 'rgba(155,123,255,0.35)');
+  ctx.fillStyle = g;
+  ctx.fillRect(sx - r * 0.5, cy - 240 * E.zoom, r, 240 * E.zoom);
+
+  // Portal mouth
+  ctx.fillStyle = '#1A1030';
+  ctx.beginPath();
+  ctx.arc(sx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = sel ? '#FFB040' : '#9B7BFF';
+  ctx.lineWidth = sel ? 3 : 2;
+  ctx.stroke();
+
+  // Up-arrow
+  ctx.fillStyle = '#E8DAFF';
+  const ah = r * 0.5;
+  ctx.beginPath();
+  ctx.moveTo(sx, cy - ah);
+  ctx.lineTo(sx + ah * 0.55, cy);
+  ctx.lineTo(sx + ah * 0.22, cy);
+  ctx.lineTo(sx + ah * 0.22, cy + ah * 0.45);
+  ctx.lineTo(sx - ah * 0.22, cy + ah * 0.45);
+  ctx.lineTo(sx - ah * 0.22, cy);
+  ctx.lineTo(sx - ah * 0.55, cy);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = sel ? '#FFB040' : '#9B7BFF';
+  ctx.font = 'bold 10px "Courier New", monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('PORTAL → layer ' + (E.currentLayerIdx + 2), sx + r + 6, cy - 6);
+}
+
+function drawFinishInEditor(finish) {
+  const [sx, sy] = worldToScreen(finish[0], finish[1]);
+  const sel = E.selected && E.selected.type === 'finish';
+  const poleH = 80 * E.zoom;
+  const fw = 30 * E.zoom, fh = 20 * E.zoom;
+
+  // Pole
+  ctx.strokeStyle = '#D0C8B8';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(sx, sy);
+  ctx.lineTo(sx, sy - poleH);
+  ctx.stroke();
+
+  // Flag
+  const cols = 3, rows = 2;
+  const cw = fw / cols, ch = fh / rows;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      ctx.fillStyle = (r + c) % 2 === 0 ? '#FFFFFF' : '#0A0A10';
+      ctx.fillRect(sx + c * cw, sy - poleH + r * ch, cw + 0.5, ch + 0.5);
+    }
+  }
+  ctx.strokeStyle = '#0A0A10';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(sx, sy - poleH, fw, fh);
+
+  if (sel) {
+    ctx.strokeStyle = '#FFB040';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(sx - 4, sy - poleH - 4, fw + 8, poleH + 8);
+  }
+
+  ctx.fillStyle = sel ? '#FFB040' : '#6DFFEC';
+  ctx.font = 'bold 10px "Courier New", monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('FINISH', sx + fw + 6, sy - poleH + fh);
+}
+
+function drawHazardInEditor(hz, L) {
+  if (!hz) return;
+  const type = hz.type;
+
+  if (type === 'treachery') {
+    const traitors = new Set(hz.traitors || []);
+    for (let i = 0; i < L.rails.length; i++) {
+      if (!traitors.has(i)) continue;
+      const r = L.rails[i];
+      const [x1, y1] = worldToScreen(r[0], r[2]);
+      const [x2, y2] = worldToScreen(r[1], r[3]);
+      ctx.save();
+      ctx.strokeStyle = 'rgba(170, 220, 255, 0.85)';
+      ctx.lineWidth = Math.max(4, 7 * E.zoom);
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(x1, y1 - 3);
+      ctx.lineTo(x2, y2 - 3);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#8AC8FF';
+      ctx.font = 'bold 10px "Courier New", monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('TRAITOR', (x1 + x2) / 2, Math.min(y1, y2) - 16);
+      ctx.restore();
+    }
+  } else if (type === 'fraud') {
+    ctx.save();
+    ctx.fillStyle = 'rgba(180, 130, 210, 0.75)';
+    ctx.font = 'bold 9px "Courier New", monospace';
+    ctx.textAlign = 'left';
+    for (let i = 0; i < L.rails.length; i++) {
+      const r = L.rails[i];
+      const [x1, y1] = worldToScreen(r[0], r[2]);
+      ctx.fillText('◊ crumble ' + (hz.crumbleDelay ?? 0.42) + 's', x1 + 4, y1 - 6);
+    }
+    ctx.restore();
+  } else if (type === 'violence') {
+    const cols = hz.columns || [];
+    for (const c of cols) {
+      const [sx, syTop] = worldToScreen(c.x, 0);
+      const [, syBot] = worldToScreen(c.x, LAYER_H);
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255, 60, 80, 0.7)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([8, 6]);
+      ctx.beginPath();
+      ctx.moveTo(sx, syTop);
+      ctx.lineTo(sx, syBot);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#FF5060';
+      ctx.beginPath();
+      ctx.moveTo(sx, syTop - 6);
+      ctx.lineTo(sx - 6, syTop - 14);
+      ctx.lineTo(sx + 6, syTop - 14);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#FF8080';
+      ctx.font = 'bold 9px "Courier New", monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('φ=' + (c.phase ?? 0), sx, syTop - 18);
+      ctx.restore();
+    }
+  } else if (type === 'heresy') {
+    ctx.save();
+    ctx.fillStyle = 'rgba(255, 150, 60, 0.75)';
+    ctx.font = 'bold 9px "Courier New", monospace';
+    ctx.textAlign = 'left';
+    const [lx, ly] = worldToScreen(10, 10);
+    ctx.fillText('◉ fire spread ' + (hz.spreadRate ?? 140) + ' px/s', lx, ly + 4);
+    ctx.restore();
+  } else if (type === 'wrath') {
+    // Show the tide starting line
+    const [sx0, sy0] = worldToScreen(0, LAYER_H - 8);
+    const [sx1] = worldToScreen(LAYER_W, LAYER_H - 8);
+    ctx.save();
+    ctx.fillStyle = 'rgba(170, 30, 40, 0.35)';
+    ctx.fillRect(sx0, sy0, sx1 - sx0, 40 * E.zoom);
+    ctx.fillStyle = '#FF5050';
+    ctx.font = 'bold 10px "Courier New", monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText('▲ tide rises @ ' + (hz.riseRate ?? 72) + ' px/s', sx0 + 6, sy0 + 12);
+    ctx.restore();
+  } else if (type === 'greed') {
+    const coins = hz.coins || [];
+    for (let i = 0; i < coins.length; i++) {
+      const c = coins[i];
+      const [sx, sy] = worldToScreen(c.x, c.y);
+      const r = Math.max(6, 12 * E.zoom);
+      ctx.save();
+      ctx.fillStyle = '#F4D03F';
+      ctx.strokeStyle = '#8A6610';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(sx, sy, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#8A6610';
+      ctx.font = 'bold ' + Math.max(8, 12 * E.zoom) + 'px Impact, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('$', sx, sy);
+      ctx.restore();
+    }
+    // Legend
+    ctx.save();
+    ctx.fillStyle = '#F4D03F';
+    ctx.font = 'bold 10px "Courier New", monospace';
+    ctx.textAlign = 'left';
+    const [lx, ly] = worldToScreen(10, 10);
+    ctx.fillText('$ coins: ' + coins.length + ' · limit ' + (hz.limit ?? 3), lx, ly + 4);
+    ctx.restore();
+  } else if (type === 'gluttony') {
+    const slush = hz.slush || [];
+    for (const s of slush) {
+      const r = L.rails[s.railIdx];
+      if (!r) continue;
+      const x0 = r[0] + (r[1] - r[0]) * s.t0;
+      const x1 = r[0] + (r[1] - r[0]) * s.t1;
+      const y0 = r[2] + (r[3] - r[2]) * s.t0;
+      const y1 = r[2] + (r[3] - r[2]) * s.t1;
+      const [sx0, sy0] = worldToScreen(x0, y0);
+      const [sx1, sy1] = worldToScreen(x1, y1);
+      ctx.save();
+      ctx.strokeStyle = '#55421A';
+      ctx.lineWidth = Math.max(6, 10 * E.zoom);
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(sx0, sy0 - 2);
+      ctx.lineTo(sx1, sy1 - 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+  } else if (type === 'lust') {
+    // Show a wind-direction indicator at the top of the layer
+    const [sx, sy] = worldToScreen(LAYER_W * 0.5, 20);
+    ctx.save();
+    ctx.fillStyle = '#B080FF';
+    ctx.font = 'bold 10px "Courier New", monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('↔ wind ±' + (hz.amplitude ?? 140) + ' · T=' + (hz.period ?? 2.8) + 's', sx, sy);
+    ctx.restore();
+  } else if (type === 'limbo') {
+    const b = hz.bell;
+    if (!b) return;
+    const [sx, sy] = worldToScreen(b.x, b.y);
+    const r = Math.max(8, 16 * E.zoom);
+    ctx.save();
+    ctx.fillStyle = '#E2B65C';
+    ctx.strokeStyle = '#0A080E';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(sx, sy, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    // Tolerance ring
+    ctx.strokeStyle = 'rgba(255, 235, 150, 0.5)';
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.arc(sx, sy, (b.tolerance || 34) * E.zoom, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#FFE38A';
+    ctx.font = 'bold 10px "Courier New", monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText('BELL · apex only', sx + r + 6, sy - r);
+    ctx.fillText('min speed ' + (b.minSpeed || 440), sx + r + 6, sy - r + 12);
+    ctx.restore();
+  }
+}
+
+function drawSpawnIndicator() {
+  if (E.currentLayerIdx !== 0) return;
+  const L = currentLayer();
+  if (L.rails.length === 0) return;
+  const r = L.rails[0];
+  const x = r[0] + 80;
+  const t = Math.min(1, Math.max(0, (80) / Math.max(1, (r[1] - r[0]))));
+  const y = r[2] + (r[3] - r[2]) * t;
+  const [sx, sy] = worldToScreen(x, y);
+  ctx.strokeStyle = '#FFB040';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(sx, sy - 8, 8, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(255,176,64,0.15)';
+  ctx.fill();
+  ctx.fillStyle = '#FFB040';
+  ctx.font = 'bold 10px "Courier New", monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('SPAWN', sx + 12, sy - 2);
+}
+
+function drawPitAndExitHints() {
+  if (E.currentLayerIdx === 0) {
+    const [sx, sy] = worldToScreen(0, LAYER_H);
+    const [sx2] = worldToScreen(LAYER_W, 0);
+    ctx.fillStyle = 'rgba(158,32,48,0.35)';
+    ctx.fillRect(sx, sy, sx2 - sx, 40 * E.zoom);
+    ctx.fillStyle = '#FF5060';
+    ctx.font = 'bold 12px system-ui';
+    ctx.textAlign = 'center';
+    ctx.fillText('▼ SPIKE PIT — FALLING OFF BOTTOM = DEATH ▼', (sx + sx2) / 2, sy + 22 * E.zoom);
+  } else if (E.currentLayerIdx === 8) {
+    const [sx, sy] = worldToScreen(0, 0);
+    const [sx2] = worldToScreen(LAYER_W, 0);
+    ctx.fillStyle = 'rgba(109,255,236,0.18)';
+    ctx.fillRect(sx, sy - 30, sx2 - sx, 30);
+    ctx.fillStyle = '#6DFFEC';
+    ctx.font = 'bold 12px system-ui';
+    ctx.textAlign = 'center';
+    ctx.fillText('▲ ESCAPE — SUMMIT ▲', (sx + sx2) / 2, sy - 10);
+  }
+}
+
+function drawCursorHint() {
+  if (E.dragState && E.dragState.type === 'pan') return;
+  const [wx, wy] = screenToWorld(E.mouseX, E.mouseY);
+  const swx = snapValue(wx), swy = snapValue(wy);
+  const [sx, sy] = worldToScreen(swx, swy);
+
+  if (E.tool === 'rail' || E.tool === 'portal' || E.tool === 'finish') {
+    ctx.strokeStyle = '#6DFFEC';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(sx, sy, 4, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = '#6DFFEC';
+    ctx.font = '10px "Courier New", monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(swx + ',' + swy, sx + 8, sy - 4);
+  }
+}
+
+// ============================================================
+// HIT TESTING
+// ============================================================
+function hitTest(mx, my) {
+  const L = currentLayer();
+  // Endpoints first
+  for (let i = 0; i < L.rails.length; i++) {
+    const r = L.rails[i];
+    const [x1, y1] = worldToScreen(r[0], r[2]);
+    const [x2, y2] = worldToScreen(r[1], r[3]);
+    if (dist(mx, my, x1, y1) < 9) return { type: 'rail', idx: i, handle: 'start' };
+    if (dist(mx, my, x2, y2) < 9) return { type: 'rail', idx: i, handle: 'end' };
+  }
+  // Rail bodies
+  for (let i = 0; i < L.rails.length; i++) {
+    const r = L.rails[i];
+    const [x1, y1] = worldToScreen(r[0], r[2]);
+    const [x2, y2] = worldToScreen(r[1], r[3]);
+    if (distToSeg(mx, my, x1, y1, x2, y2) < 8) return { type: 'rail', idx: i, handle: null };
+  }
+  // Portal
+  if (L.portal) {
+    const [sx, sy] = worldToScreen(L.portal[0], L.portal[1]);
+    const r = Math.max(20, 36 * E.zoom);
+    if (dist(mx, my, sx, sy - 10 * E.zoom) < r) return { type: 'portal' };
+  }
+  // Finish
+  if (L.finish) {
+    const [sx, sy] = worldToScreen(L.finish[0], L.finish[1]);
+    const poleH = 80 * E.zoom, fw = 30 * E.zoom, fh = 20 * E.zoom;
+    if (mx >= sx - 6 && mx <= sx + fw + 6 && my >= sy - poleH - 6 && my <= sy + 6) return { type: 'finish' };
+  }
+  return null;
+}
+
+function dist(ax, ay, bx, by) { return Math.hypot(ax - bx, ay - by); }
+function distToSeg(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return dist(px, py, ax, ay);
+  let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  return dist(px, py, ax + t * dx, ay + t * dy);
+}
+
+// ============================================================
+// MOUSE
+// ============================================================
+canvas.addEventListener('mousedown', onMouseDown);
+canvas.addEventListener('mousemove', onMouseMove);
+window.addEventListener('mouseup', onMouseUp);
+canvas.addEventListener('wheel', onWheel, { passive: false });
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+function onMouseDown(e) {
+  const mx = e.offsetX, my = e.offsetY;
+  E.mouseX = mx; E.mouseY = my;
+  if (e.button === 1 || e.button === 2 || E.spacePressed) {
+    E.dragState = { type: 'pan', startMX: mx, startMY: my, startPanX: E.panX, startPanY: E.panY };
+    canvas.classList.add('panning');
+    e.preventDefault();
+    return;
+  }
+  if (e.button !== 0) return;
+  const [wx, wy] = screenToWorld(mx, my);
+  const swx = snapValue(wx), swy = snapValue(wy);
+  const L = currentLayer();
+
+  if (E.tool === 'select') {
+    const hit = hitTest(mx, my);
+    if (hit) {
+      E.selected = hit;
+      if (hit.type === 'rail') {
+        E.dragState = { type: 'rail-drag', handle: hit.handle, idx: hit.idx,
+          startWX: wx, startWY: wy, original: [...L.rails[hit.idx]] };
+      } else if (hit.type === 'portal') {
+        E.dragState = { type: 'portal-drag', startWX: wx, startWY: wy, original: [...L.portal] };
+      } else if (hit.type === 'finish') {
+        E.dragState = { type: 'finish-drag', startWX: wx, startWY: wy, original: [...L.finish] };
+      }
+    } else {
+      E.selected = null;
+    }
+  } else if (E.tool === 'rail') {
+    const newRail = [swx, swx, swy, swy];
+    L.rails.push(newRail);
+    const idx = L.rails.length - 1;
+    E.selected = { type: 'rail', idx, handle: 'end' };
+    E.dragState = { type: 'rail-create', idx };
+  } else if (E.tool === 'portal') {
+    L.portal = [swx, swy];
+    E.selected = { type: 'portal' };
+  } else if (E.tool === 'finish') {
+    if (E.currentLayerIdx === 8) {
+      L.finish = [swx, swy];
+      E.selected = { type: 'finish' };
+    } else {
+      flashStatus('Finish can only be placed on layer 9 (LIMBO).');
+    }
+  }
+  refreshUI();
+}
+
+function onMouseMove(e) {
+  const mx = e.offsetX, my = e.offsetY;
+  E.mouseX = mx; E.mouseY = my;
+  if (!E.dragState) return;
+  const ds = E.dragState;
+  if (ds.type === 'pan') {
+    E.panX = ds.startPanX + (mx - ds.startMX);
+    E.panY = ds.startPanY + (my - ds.startMY);
+    return;
+  }
+  const [wx, wy] = screenToWorld(mx, my);
+  const dx = wx - ds.startWX;
+  const dy = wy - ds.startWY;
+  const L = currentLayer();
+  if (ds.type === 'rail-drag') {
+    const rail = L.rails[ds.idx];
+    if (ds.handle === 'start') {
+      rail[0] = snapValue(ds.original[0] + dx);
+      rail[2] = snapValue(ds.original[2] + dy);
+    } else if (ds.handle === 'end') {
+      rail[1] = snapValue(ds.original[1] + dx);
+      rail[3] = snapValue(ds.original[3] + dy);
+    } else {
+      rail[0] = snapValue(ds.original[0] + dx);
+      rail[1] = snapValue(ds.original[1] + dx);
+      rail[2] = snapValue(ds.original[2] + dy);
+      rail[3] = snapValue(ds.original[3] + dy);
+    }
+  } else if (ds.type === 'rail-create') {
+    const rail = L.rails[ds.idx];
+    rail[1] = snapValue(wx);
+    rail[3] = snapValue(wy);
+  } else if (ds.type === 'portal-drag') {
+    L.portal[0] = snapValue(ds.original[0] + dx);
+    L.portal[1] = snapValue(ds.original[1] + dy);
+  } else if (ds.type === 'finish-drag') {
+    L.finish[0] = snapValue(ds.original[0] + dx);
+    L.finish[1] = snapValue(ds.original[1] + dy);
+  }
+  refreshUI();
+}
+
+function onMouseUp(e) {
+  const ds = E.dragState;
+  let didEdit = false;
+  if (ds) {
+    if (ds.type === 'rail-create') {
+      const L = currentLayer();
+      const r = L.rails[ds.idx];
+      if (Math.abs(r[1] - r[0]) < 20) {
+        L.rails.pop();
+        E.selected = null;
+      } else if (r[0] > r[1]) {
+        [r[0], r[1]] = [r[1], r[0]];
+        [r[2], r[3]] = [r[3], r[2]];
+      }
+      didEdit = true;
+    } else if (ds.type === 'rail-drag' || ds.type === 'portal-drag' || ds.type === 'finish-drag') {
+      didEdit = true;
+    }
+    refreshUI();
+  }
+  E.dragState = null;
+  canvas.classList.remove('panning');
+  if (didEdit) {
+    persistSession();
+    pushHistory();
+  }
+}
+
+function onWheel(e) {
+  e.preventDefault();
+  const factor = Math.exp(-e.deltaY * 0.001);
+  const mx = e.offsetX, my = e.offsetY;
+  const [wx, wy] = screenToWorld(mx, my);
+  E.zoom = Math.max(0.1, Math.min(4, E.zoom * factor));
+  const [sx, sy] = worldToScreen(wx, wy);
+  E.panX += mx - sx;
+  E.panY += my - sy;
+}
+
+// ============================================================
+// KEYBOARD
+// ============================================================
+window.addEventListener('keydown', e => {
+  const ae = document.activeElement;
+  if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT')) return;
+  switch (e.code) {
+    case 'KeyS': setTool('select'); break;
+    case 'KeyR': setTool('rail'); break;
+    case 'KeyP': setTool('portal'); break;
+    case 'KeyF': setTool('finish'); break;
+    case 'Space': E.spacePressed = true; e.preventDefault(); break;
+    case 'Delete': case 'Backspace': deleteSelected(); e.preventDefault(); break;
+    case 'Escape': E.selected = null; refreshUI(); break;
+    case 'BracketLeft': changeLayer(-1); break;
+    case 'BracketRight': changeLayer(1); break;
+    case 'KeyD': if (e.ctrlKey || e.metaKey) { duplicateSelected(); e.preventDefault(); } break;
+    case 'KeyZ':
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey) { undo(); e.preventDefault(); }
+      else if ((e.ctrlKey || e.metaKey) && e.shiftKey) { redo(); e.preventDefault(); }
+      break;
+    case 'KeyH': fitView(); break;
+    case 'ArrowLeft': case 'ArrowRight': case 'ArrowUp': case 'ArrowDown':
+      nudgeSelected(e.code, e.shiftKey ? 10 : 1);
+      e.preventDefault();
+      break;
+  }
+});
+window.addEventListener('keyup', e => {
+  if (e.code === 'Space') E.spacePressed = false;
+});
+
+function nudgeSelected(code, mult) {
+  if (!E.selected) return;
+  const d = E.gridSize * mult;
+  const dx = code === 'ArrowLeft' ? -d : code === 'ArrowRight' ? d : 0;
+  const dy = code === 'ArrowUp' ? -d : code === 'ArrowDown' ? d : 0;
+  const L = currentLayer();
+  if (E.selected.type === 'rail') {
+    const r = L.rails[E.selected.idx];
+    r[0] += dx; r[1] += dx;
+    r[2] += dy; r[3] += dy;
+  } else if (E.selected.type === 'portal') {
+    L.portal[0] += dx;
+    L.portal[1] += dy;
+  } else if (E.selected.type === 'finish') {
+    L.finish[0] += dx;
+    L.finish[1] += dy;
+  }
+  refreshUI();
+  persistSession();
+  pushHistory();
+}
+
+function deleteSelected() {
+  if (!E.selected) return;
+  const L = currentLayer();
+  if (E.selected.type === 'rail') {
+    L.rails.splice(E.selected.idx, 1);
+  } else if (E.selected.type === 'portal') {
+    delete L.portal;
+  } else if (E.selected.type === 'finish') {
+    delete L.finish;
+  }
+  E.selected = null;
+  refreshUI();
+  persistSession();
+  pushHistory();
+}
+
+function duplicateSelected() {
+  if (!E.selected) return;
+  const L = currentLayer();
+  if (E.selected.type === 'rail') {
+    const r = L.rails[E.selected.idx];
+    const newR = [r[0] + 60, r[1] + 60, r[2], r[3]];
+    L.rails.push(newR);
+    E.selected = { type: 'rail', idx: L.rails.length - 1, handle: null };
+    refreshUI();
+    persistSession();
+    pushHistory();
+  }
+}
+
+// ============================================================
+// UNDO / REDO
+// ============================================================
+const history = [];
+let historyIdx = -1;
+function pushHistory() {
+  history.length = historyIdx + 1;
+  history.push(clone(E.layers));
+  if (history.length > 50) history.shift();
+  historyIdx = history.length - 1;
+}
+function undo() {
+  if (historyIdx <= 0) return;
+  historyIdx--;
+  E.layers = clone(history[historyIdx]);
+  E.selected = null;
+  refreshUI();
+}
+function redo() {
+  if (historyIdx >= history.length - 1) return;
+  historyIdx++;
+  E.layers = clone(history[historyIdx]);
+  E.selected = null;
+  refreshUI();
+}
+pushHistory();
+
+// ============================================================
+// UI
+// ============================================================
+function setTool(t) {
+  E.tool = t;
+  document.querySelectorAll('[id^=tool-]').forEach(b => b.classList.toggle('active', b.id === 'tool-' + t));
+}
+['select','rail','portal','finish'].forEach(t => {
+  document.getElementById('tool-' + t).onclick = () => setTool(t);
+});
+
+function populateLayerSelect() {
+  layerSelect.innerHTML = '';
+  E.layers.forEach((L, i) => {
+    const opt = document.createElement('option');
+    opt.value = i;
+    const mark = (i === 0 ? ' ⊥' : i === 8 ? ' ⊤' : '');
+    opt.textContent = (i + 1) + '. ' + L.name + mark;
+    layerSelect.appendChild(opt);
+  });
+  layerSelect.value = E.currentLayerIdx;
+}
+layerSelect.addEventListener('change', () => {
+  E.currentLayerIdx = parseInt(layerSelect.value);
+  E.selected = null;
+  refreshUI();
+});
+document.getElementById('prev-layer').onclick = () => changeLayer(-1);
+document.getElementById('next-layer').onclick = () => changeLayer(1);
+
+function changeLayer(dir) {
+  E.currentLayerIdx = Math.max(0, Math.min(8, E.currentLayerIdx + dir));
+  E.selected = null;
+  refreshUI();
+}
+
+layerName.addEventListener('input', () => {
+  currentLayer().name = layerName.value;
+  populateLayerSelect();
+  persistSession();
+});
+layerTint.addEventListener('input', () => {
+  currentLayer().tint = layerTint.value;
+  persistSession();
+});
+
+gridSizeSelect.addEventListener('change', () => {
+  E.gridSize = parseInt(gridSizeSelect.value);
+});
+snapToggle.addEventListener('change', () => {
+  E.snap = snapToggle.checked;
+});
+
+document.getElementById('delete-btn').onclick = deleteSelected;
+document.getElementById('duplicate-btn').onclick = duplicateSelected;
+
+document.getElementById('export-btn').onclick = () => {
+  jsonArea.value = stringifyLayers(E.layers);
+  jsonArea.focus();
+  jsonArea.select();
+};
+document.getElementById('import-btn').onclick = () => {
+  try {
+    const parsed = parseLayers(jsonArea.value);
+    if (!Array.isArray(parsed) || parsed.length !== 9) throw new Error('expected 9 layers');
+    for (const L of parsed) {
+      if (!L.rails || !Array.isArray(L.rails)) throw new Error('each layer needs a rails array');
+      if (typeof L.name !== 'string') throw new Error('each layer needs a name');
+      if (typeof L.tint !== 'string') throw new Error('each layer needs a tint');
+    }
+    E.layers = parsed;
+    E.selected = null;
+    E.currentLayerIdx = 0;
+    refreshUI();
+    pushHistory();
+    persistSession();
+    flashStatus('Imported.');
+  } catch (err) {
+    alert('Import failed: ' + err.message);
+  }
+};
+
+document.getElementById('testplay-btn').onclick = () => {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(E.layers));
+    window.open('railgrind.html', '_blank');
+  } catch (err) {
+    alert('Could not save to localStorage: ' + err.message);
+  }
+};
+
+document.getElementById('clear-override-btn').onclick = () => {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+    flashStatus('Cleared — the game will use its built-in layers.');
+  } catch (e) {}
+};
+
+document.getElementById('reset-btn').onclick = () => {
+  if (confirm('Reset all 9 layers to built-in defaults? This also clears your editor session.')) {
+    E.layers = clone(DEFAULT_LAYERS);
+    E.selected = null;
+    E.currentLayerIdx = 0;
+    refreshUI();
+    pushHistory();
+    persistSession();
+  }
+};
+
+function stringifyLayers(layers) {
+  let out = '[\n';
+  layers.forEach((L, i) => {
+    out += '  {\n';
+    out += '    name: ' + JSON.stringify(L.name) + ',\n';
+    out += '    tint: ' + JSON.stringify(L.tint) + ',\n';
+    out += '    rails: [\n';
+    for (const r of L.rails) {
+      out += '      [' + r.map(v => String(v).padStart(4, ' ')).join(', ') + '],\n';
+    }
+    out += '    ],\n';
+    if (L.portal) out += '    portal: [' + L.portal[0] + ', ' + L.portal[1] + '],\n';
+    if (L.finish) out += '    finish: [' + L.finish[0] + ', ' + L.finish[1] + '],\n';
+    if (L.hazard) out += '    hazard: ' + JSON.stringify(L.hazard) + ',\n';
+    out += '  }' + (i < layers.length - 1 ? ',' : '') + '\n';
+  });
+  out += ']';
+  return out;
+}
+
+function parseLayers(str) {
+  str = str.trim();
+  try { return JSON.parse(str); } catch {}
+  return new Function('"use strict"; return (' + str + ')')();
+}
+
+let statusFlashTimer = null;
+function flashStatus(msg) {
+  clearTimeout(statusFlashTimer);
+  const t = document.createElement('div');
+  t.textContent = msg;
+  t.style.cssText = 'position:absolute;top:60px;left:50%;transform:translateX(-50%);' +
+    'background:#2A4A30;color:#E6D9C0;padding:8px 16px;border-radius:4px;' +
+    'border:1px solid #50A070;font-size:12px;z-index:999;pointer-events:none;' +
+    'box-shadow:0 4px 12px rgba(0,0,0,0.6)';
+  document.getElementById('canvas-wrap').appendChild(t);
+  statusFlashTimer = setTimeout(() => t.remove(), 2000);
+}
+
+function refreshUI() {
+  populateLayerSelect();
+  const L = currentLayer();
+  layerName.value = L.name;
+  layerTint.value = L.tint;
+  updateSelectionInfo();
+  refreshHazardPanel();
+}
+
+// ============================================================
+// HAZARD PANEL
+// ============================================================
+const HAZARD_DEFAULTS = {
+  treachery: () => ({ type: 'treachery', traitors: [] }),
+  fraud:     () => ({ type: 'fraud', crumbleDelay: 0.42 }),
+  violence:  () => ({ type: 'violence', telegraph: 0.55, period: 1.9, columns: [] }),
+  heresy:    () => ({ type: 'heresy', spreadRate: 140 }),
+  wrath:     () => ({ type: 'wrath', riseRate: 72, startDelay: 0.6 }),
+  greed:     () => ({ type: 'greed', limit: 3, coins: [] }),
+  gluttony:  () => ({ type: 'gluttony', slowDur: 1.3, slowFactor: 0.45, slush: [] }),
+  lust:      () => ({ type: 'lust', period: 2.8, amplitude: 140 }),
+  limbo:     () => ({ type: 'limbo', bell: { x: 2440, y: 220, tolerance: 34, minSpeed: 440 } }),
+};
+
+const hazardTypeSelect = document.getElementById('hazard-type');
+const hazardFields = document.getElementById('hazard-fields');
+const hazardHelp = document.getElementById('hazard-help');
+
+hazardTypeSelect.addEventListener('change', () => {
+  const L = currentLayer();
+  const v = hazardTypeSelect.value;
+  if (!v) {
+    delete L.hazard;
+  } else if (!L.hazard || L.hazard.type !== v) {
+    L.hazard = HAZARD_DEFAULTS[v]();
+  }
+  persistSession();
+  refreshHazardPanel();
+});
+
+function numField(label, key, value, onChange, step = 0.05) {
+  const wrap = document.createElement('label');
+  wrap.innerHTML = '<span>' + label + '</span>';
+  const inp = document.createElement('input');
+  inp.type = 'number';
+  inp.step = String(step);
+  inp.value = String(value);
+  inp.addEventListener('input', () => {
+    const n = parseFloat(inp.value);
+    if (isFinite(n)) { onChange(n); persistSession(); }
+  });
+  wrap.appendChild(inp);
+  return wrap;
+}
+
+function intField(label, value, onChange) {
+  return numField(label, null, value, onChange, 1);
+}
+
+function refreshHazardPanel() {
+  const L = currentLayer();
+  const hz = L.hazard;
+  hazardTypeSelect.value = hz ? hz.type : '';
+  hazardFields.innerHTML = '';
+  hazardHelp.textContent = '';
+  if (!hz) return;
+
+  if (hz.type === 'treachery') {
+    const cur = (hz.traitors || []).join(', ');
+    const wrap = document.createElement('label');
+    wrap.innerHTML = '<span>Traitor rail indices (comma-separated)</span>';
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.value = cur;
+    inp.addEventListener('input', () => {
+      const raw = inp.value.split(',').map(s => parseInt(s.trim(), 10)).filter(n => isFinite(n));
+      hz.traitors = raw;
+      persistSession();
+    });
+    wrap.appendChild(inp);
+    hazardFields.appendChild(wrap);
+    hazardHelp.textContent = 'Traitor rails collapse on contact. Click rails on the canvas (with RAIL tool inactive) to see indices in Selection.';
+  } else if (hz.type === 'fraud') {
+    hazardFields.appendChild(numField('Crumble delay (s)', null, hz.crumbleDelay, v => hz.crumbleDelay = v));
+    hazardHelp.textContent = 'Every rail vanishes this many seconds after the cart lands on it.';
+  } else if (hz.type === 'violence') {
+    hazardFields.appendChild(numField('Period (s)', null, hz.period, v => hz.period = v));
+    hazardFields.appendChild(numField('Telegraph (s)', null, hz.telegraph, v => hz.telegraph = v));
+    const list = document.createElement('div');
+    list.style.cssText = 'font-size:10px;font-family:"Courier New",monospace;color:#C47A5A;line-height:1.5;margin-top:4px';
+    const cols = (hz.columns || []);
+    list.innerHTML = '<b style="color:#FFB040">Spike columns:</b> ' + cols.length
+      + ' — <a href="#" id="vio-add" style="color:#6DFFEC">+add at cursor</a>';
+    hazardFields.appendChild(list);
+    setTimeout(() => {
+      const a = document.getElementById('vio-add');
+      if (a) a.onclick = (e) => {
+        e.preventDefault();
+        const [wx] = screenToWorld(E.mouseX, E.mouseY);
+        hz.columns = hz.columns || [];
+        hz.columns.push({ x: Math.max(20, Math.min(LAYER_W - 20, Math.round(wx))), phase: 0 });
+        persistSession();
+        refreshHazardPanel();
+      };
+    }, 0);
+    const clearBtn = document.createElement('button');
+    clearBtn.className = 'danger';
+    clearBtn.style.cssText = 'margin-top:6px;width:100%';
+    clearBtn.textContent = 'Clear columns';
+    clearBtn.onclick = () => { hz.columns = []; persistSession(); refreshHazardPanel(); };
+    hazardFields.appendChild(clearBtn);
+    hazardHelp.textContent = 'Columns drop spikes periodically with a red telegraph before each drop.';
+  } else if (hz.type === 'heresy') {
+    hazardFields.appendChild(numField('Spread rate (px/s)', null, hz.spreadRate, v => hz.spreadRate = v, 5));
+    hazardHelp.textContent = 'Landing ignites the rail; fire creeps outward at this rate.';
+  } else if (hz.type === 'wrath') {
+    hazardFields.appendChild(numField('Rise rate (px/s)', null, hz.riseRate, v => hz.riseRate = v, 1));
+    hazardFields.appendChild(numField('Start delay (s)', null, hz.startDelay || 0, v => hz.startDelay = v));
+    hazardHelp.textContent = 'Tide starts at layer floor and rises steadily. Higher rate = tighter window.';
+  } else if (hz.type === 'greed') {
+    hazardFields.appendChild(intField('Coin limit', hz.limit, v => hz.limit = Math.max(0, v | 0)));
+    const list = document.createElement('div');
+    list.style.cssText = 'font-size:10px;font-family:"Courier New",monospace;color:#F4D03F;line-height:1.5;margin-top:4px';
+    const coins = hz.coins || [];
+    list.innerHTML = '<b style="color:#FFB040">Coins:</b> ' + coins.length
+      + ' — <a href="#" id="gr-add" style="color:#6DFFEC">+add at cursor</a>';
+    hazardFields.appendChild(list);
+    setTimeout(() => {
+      const a = document.getElementById('gr-add');
+      if (a) a.onclick = (e) => {
+        e.preventDefault();
+        const [wx, wy] = screenToWorld(E.mouseX, E.mouseY);
+        hz.coins = hz.coins || [];
+        hz.coins.push({
+          x: Math.max(10, Math.min(LAYER_W - 10, Math.round(wx / 10) * 10)),
+          y: Math.max(10, Math.min(LAYER_H - 10, Math.round(wy / 5) * 5)),
+        });
+        persistSession();
+        refreshHazardPanel();
+      };
+    }, 0);
+    const clearBtn = document.createElement('button');
+    clearBtn.className = 'danger';
+    clearBtn.style.cssText = 'margin-top:6px;width:100%';
+    clearBtn.textContent = 'Clear coins';
+    clearBtn.onclick = () => { hz.coins = []; persistSession(); refreshHazardPanel(); };
+    hazardFields.appendChild(clearBtn);
+    hazardHelp.textContent = 'Collecting more than the limit locks the portal for the run.';
+  } else if (hz.type === 'gluttony') {
+    hazardFields.appendChild(numField('Slow duration (s)', null, hz.slowDur, v => hz.slowDur = v));
+    hazardFields.appendChild(numField('Slow factor (0-1)', null, hz.slowFactor, v => hz.slowFactor = v));
+    const list = document.createElement('div');
+    list.style.cssText = 'font-size:10px;font-family:"Courier New",monospace;color:#55421A;line-height:1.5;margin-top:4px';
+    list.innerHTML = '<b style="color:#FFB040">Slush segments:</b> ' + (hz.slush || []).length;
+    hazardFields.appendChild(list);
+    // per-slush editors
+    (hz.slush || []).forEach((s, i) => {
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.style.cssText = 'margin-top:4px;font-size:10px;font-family:"Courier New",monospace';
+      row.innerHTML =
+        '<span style="flex:1">rail ' + s.railIdx + ' · ' + s.t0.toFixed(2) + '–' + s.t1.toFixed(2) + '</span>';
+      const rm = document.createElement('button');
+      rm.className = 'danger';
+      rm.style.cssText = 'padding:2px 6px;font-size:10px';
+      rm.textContent = '×';
+      rm.onclick = () => { hz.slush.splice(i, 1); persistSession(); refreshHazardPanel(); };
+      row.appendChild(rm);
+      hazardFields.appendChild(row);
+    });
+    const addBtn = document.createElement('button');
+    addBtn.style.cssText = 'margin-top:6px;width:100%';
+    addBtn.textContent = '+ Add slush on selected rail';
+    addBtn.onclick = () => {
+      if (!E.selected || E.selected.type !== 'rail') {
+        flashStatus('Select a rail first (S then click)');
+        return;
+      }
+      hz.slush = hz.slush || [];
+      hz.slush.push({ railIdx: E.selected.idx, t0: 0.3, t1: 0.7 });
+      persistSession();
+      refreshHazardPanel();
+    };
+    hazardFields.appendChild(addBtn);
+    hazardHelp.textContent = 'Select a rail, then "+ Add slush". t0/t1 are 0-1 along the rail.';
+  } else if (hz.type === 'lust') {
+    hazardFields.appendChild(numField('Period (s)', null, hz.period, v => hz.period = v));
+    hazardFields.appendChild(numField('Amplitude (px/s)', null, hz.amplitude, v => hz.amplitude = v, 5));
+    hazardHelp.textContent = 'Wind is a sine wave that peaks at this amplitude. Only affects airborne cart.';
+  } else if (hz.type === 'limbo') {
+    const b = hz.bell = hz.bell || { x: 2440, y: 220, tolerance: 34, minSpeed: 440 };
+    hazardFields.appendChild(numField('Bell X', null, b.x, v => b.x = v, 10));
+    hazardFields.appendChild(numField('Bell Y (rel)', null, b.y, v => b.y = v, 10));
+    hazardFields.appendChild(numField('Tolerance (px)', null, b.tolerance, v => b.tolerance = v, 2));
+    hazardFields.appendChild(numField('Min speed (px/s)', null, b.minSpeed, v => b.minSpeed = v, 10));
+    hazardHelp.textContent = 'Cart must strike the bell at apex (|vy|<80) AND at >= min speed. Otherwise it falls off the end.';
+  }
+}
+
+function updateSelectionInfo() {
+  if (!E.selected) {
+    selectionInfo.textContent = 'Nothing selected';
+    return;
+  }
+  const L = currentLayer();
+  if (E.selected.type === 'rail') {
+    const r = L.rails[E.selected.idx];
+    if (!r) { E.selected = null; selectionInfo.textContent = 'Nothing selected'; return; }
+    const dy = r[3] - r[2];
+    const dx = r[1] - r[0];
+    const slope = dx === 0 ? 0 : (dy / dx).toFixed(3);
+    selectionInfo.innerHTML =
+      '<b>RAIL #' + E.selected.idx + '</b><br>' +
+      'x: <span class="coord">' + r[0] + '</span> → <span class="coord">' + r[1] + '</span> ' +
+      '<span style="color:#998B70">(w=' + dx + ')</span><br>' +
+      'y: <span class="coord">' + r[2] + '</span> → <span class="coord">' + r[3] + '</span> ' +
+      '<span style="color:#998B70">(slope=' + slope + ')</span>';
+  } else if (E.selected.type === 'portal') {
+    if (!L.portal) { E.selected = null; selectionInfo.textContent = 'Nothing selected'; return; }
+    selectionInfo.innerHTML =
+      '<b>PORTAL</b><br>x: <span class="coord">' + L.portal[0] + '</span><br>' +
+      'y: <span class="coord">' + L.portal[1] + '</span><br>' +
+      '→ ' + (E.layers[E.currentLayerIdx + 1]?.name || '—');
+  } else if (E.selected.type === 'finish') {
+    if (!L.finish) { E.selected = null; selectionInfo.textContent = 'Nothing selected'; return; }
+    selectionInfo.innerHTML =
+      '<b>FINISH</b><br>x: <span class="coord">' + L.finish[0] + '</span><br>' +
+      'y: <span class="coord">' + L.finish[1] + '</span>';
+  }
+}
+
+// ============================================================
+// BOOT
+// ============================================================
+populateLayerSelect();
+refreshUI();
+
+function loop() {
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>

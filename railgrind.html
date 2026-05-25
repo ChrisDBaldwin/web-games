@@ -6,8 +6,8 @@
 <title>RAILGRIND</title>
 <style>
   *{margin:0;padding:0;box-sizing:border-box}
-  html,body{width:100%;height:100%;overflow:hidden;background:#0A0A0F;
-    font-family:system-ui,-apple-system,"Helvetica Neue",Impact,sans-serif;
+  html,body{width:100%;height:100%;overflow:hidden;background:#03030A;
+    font-family:Impact,"Arial Black",system-ui,sans-serif;
     user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent;
     touch-action:none;overscroll-behavior:none}
   body{display:flex;justify-content:center;align-items:center}
@@ -21,186 +21,593 @@
 'use strict';
 
 // ============================================================
-// === CONFIG =================================================
+// CONFIG
 // ============================================================
 const CFG = {
-  // Logical resolution — letterboxed to fit viewport
-  W: 960, H: 540,
+  W: 720, H: 540,            // game-viewport size (4:3)
+  CANVAS_W_WIDE: 960,        // full canvas width when sidebars fit
+  SIDEBAR_W: 120,            // each sidebar when in wide mode
+  CART_SCREEN_X: 240,        // 1/3 from left of game viewport
+  CART_SCREEN_Y: 300,
+  CART_W: 64, CART_H: 42,
+  OUTLINE: 3,
 
-  // Rail / world
-  TILE: 56,              // tile width in px
-  RAIL_Y: 410,           // y of the rail top surface (cart sits here)
+  GRAVITY: 1700,
+  JUMP_V: 760,          // velocity at full press — max jump height
+  JUMP_V_MIN: 360,      // velocity cap when button released early — min hop
+  JUMP_HOLD_G: 1400,    // slight hang-time at jump peak
+  COYOTE: 0.13,
+  JUMP_BUFFER: 0.14,
 
-  // Cart
-  CART_W: 60, CART_H: 44,
-  CART_SCREEN_X: 280,    // cart's fixed screen x (camera-locked)
+  BASE_SPEED: 400,
+  MIN_SPEED: 220,
+  MAX_SPEED: 620,
+  SPEED_DRAG: 2.6,
+  SLOPE_G: 1600,
 
-  // Physics
-  GRAVITY: 1700,         // px/s^2
-  JUMP_V: 780,           // upward jump velocity
-  COYOTE: 0.08,          // 80ms coyote window after leaving rail
-  JUMP_BUFFER: 0.10,     // 100ms input buffer
+  LAYER_COUNT: 9,
+  LAYER_H: 620,
+  LAYER_WIDTH: 2400,
+  PORTAL_R: 54,
+  SPIKE_H: 60,
+  FINISH_W: 40,
 
-  // Speed
-  SPEED_BASE: 320,       // starting horizontal speed (px/s)
-  SPEED_CAP: 400,        // ~+25% plateau
-  SPEED_RAMP: 1.33,      // px/s per second — reach cap at ~60s
-
-  // Chunk generation
-  CHUNK_FLAT_MIN: 6, CHUNK_FLAT_MAX: 10,
-  GAP_MIN: 2,
-  GAP_MAX_TILES_CAP: 4,
-  SAFETY_TILES: 1,       // margin below max-jumpable
-  FLAT_EVERY: 4,         // force flat after N non-flat chunks
-  EARLY_METERS: 300,     // no back-to-back non-flat until this distance
-  ENEMY_UNLOCK_M: 500,
-  GAPENEMY_UNLOCK_M: 1200,
-
-  // Game over
-  DEATH_LOCKOUT: 0.6,    // 600ms before restart accepted
-  DYING_DURATION: 0.7,   // time in 'dying' state before transitioning
-  FREEZE_FRAME: 0.22,    // hold death frame this long
-
-  // Units
-  M_PER_PX: 0.03,        // 1 meter = ~33 px
-
-  // Loop
   STEP: 1/60,
 
-  // Palette — use 3-4 per scene, not all five
-  C_PINK:   '#FF2E88',
-  C_CYAN:   '#00E5FF',
-  C_YELLOW: '#FFE500',
-  C_BLACK:  '#0A0A0F',
-  C_BONE:   '#F5F1E8',
-  C_DARK:   '#0a1a24',
-  C_MID:    '#0d2a38',
-  C_SUB:    '#081418',
+  GHOST_RISE: 70,
+  GHOST_WOBBLE_F: 3.8,
+  GHOST_WOBBLE_A: 16,
+  GHOST_LIFE: 2.2,
+  DEATH_FREEZE: 0.2,
 
-  OUTLINE: 3,
+  CART_SQUASH_LAND_DUR: 0.28,
+  CART_SQUASH_JUMP_DUR: 0.18,
+  RAIL_BOB_DUR: 0.55,
+
+  C_BG_DEEP:   '#030410',
+  C_BG_MID:    '#0B0A1A',
+  C_EARTH:     '#120A14',
+  C_EARTH_D:   '#06030A',
+  C_RAIL:      '#B0A190',
+  C_RAIL_HI:   '#F2E2C0',
+  C_RAIL_D:    '#46342A',
+  C_WOOD:      '#3E2A1B',
+  C_WOOD_D:    '#1C1208',
+  C_CART:      '#8A4626',
+  C_CART_HI:   '#D07A30',
+  C_CART_D:    '#3A1B0D',
+  C_BRASS:     '#D8B468',
+  C_BRASS_D:   '#785F30',
+  C_LAMP:      '#FFE38A',
+  C_NEON_C:    '#6DFFEC',
+  C_NEON_A:    '#FFB040',
+  C_NEON_P:    '#FF5080',
+  C_BONE:      '#E6D9C0',
+  C_RIDER:     '#9C7E66',
+  C_PORTAL:    '#9B7BFF',
+  C_PORTAL_HI: '#E8DAFF',
+  C_SPIKE:     '#9E2030',
+  C_SPIKE_HI:  '#FF5060',
+  C_ANGEL:     '#FFF9E0',
+  C_HALO:      '#FFE38A',
+  C_BLACK:     '#04040A',
 };
 
-// Derived: max horizontally jumpable distance (in tiles) at given speed
-function maxJumpableTiles(speed) {
-  const airtime = 2 * CFG.JUMP_V / CFG.GRAVITY;
-  const distPx = speed * airtime;
-  const tiles = Math.floor(distPx / CFG.TILE) - CFG.SAFETY_TILES;
-  return Math.max(2, tiles);
+// ============================================================
+// LAYER DATA — hand-authored. Index 0 = bottom (start). Index 8 = summit.
+// Rail format: [x1, x2, yOffset1, yOffset2]  — yOffset is within the layer (0 = ceiling, LAYER_H = floor)
+// Portal format: [x, yOffset]  — always teleports to the next layer up
+// ============================================================
+const LAYERS = [
+  // 0 — TREACHERY: warm-up. Solid rails, just gaps to clear.
+  {
+    name: 'TREACHERY',
+    tint: '#1A2A3A',
+    rails: [
+      [   0,  520, 360, 360],
+      [ 620,  960, 350, 360],
+      [1060, 1380, 360, 340],
+      [1480, 1780, 330, 330],
+      [1880, 2360, 340, 330],
+    ],
+    portal: [2320, 330],
+  },
+  // 1 — FRAUD: nothing you touch is real. Every rail crumbles shortly after contact.
+  {
+    name: 'FRAUD',
+    tint: '#2A1A30',
+    rails: [
+      [   0,  380, 380, 380],
+      [ 460,  700, 360, 340],
+      [ 580,  860, 230, 230],
+      [ 800, 1080, 380, 380],
+      [ 960, 1260, 240, 240],
+      [1180, 1440, 370, 360],
+      [1540, 1780, 350, 330],
+      [1880, 2120, 330, 320],
+      [2220, 2360, 320, 320],
+    ],
+    portal: [2320, 320],
+    hazard: { type: 'fraud', crumbleDelay: 0.42 },
+  },
+  // 2 — VIOLENCE: spike-rain columns crash from the sky in telegraphed waves.
+  {
+    name: 'VIOLENCE',
+    tint: '#3A1818',
+    rails: [
+      [   0,  240, 360, 360],
+      [ 320,  500, 350, 350],
+      [ 580,  740, 340, 340],
+      [ 820,  980, 340, 340],
+      [1060, 1220, 330, 330],
+      [1300, 1460, 330, 330],
+      [1540, 1720, 320, 320],
+      [1800, 1980, 320, 320],
+      [2060, 2240, 320, 320],
+      [2280, 2360, 320, 320],
+    ],
+    portal: [2320, 320],
+    hazard: {
+      type: 'violence',
+      telegraph: 0.55,
+      period: 1.9,
+      columns: [
+        { x:  260, phase: 0.0 },
+        { x:  620, phase: 0.6 },
+        { x:  980, phase: 1.2 },
+        { x: 1340, phase: 0.3 },
+        { x: 1700, phase: 0.9 },
+        { x: 2040, phase: 1.5 },
+      ],
+    },
+  },
+  // 3 — HERESY: fire spreads along rails from the point you landed.
+  {
+    name: 'HERESY',
+    tint: '#1F2A18',
+    rails: [
+      [   0,  280, 380, 340],
+      [ 360,  540, 330, 370],
+      [ 620,  820, 370, 320],
+      [ 900, 1080, 320, 360],
+      [1160, 1360, 360, 300],
+      [1440, 1640, 310, 350],
+      [1720, 1900, 340, 290],
+      [1980, 2180, 300, 340],
+      [2260, 2360, 320, 310],
+    ],
+    portal: [2320, 310],
+    hazard: { type: 'heresy', spreadRate: 140 },
+  },
+  // 4 — WRATH: a blood tide rises from below, pressuring you upward.
+  {
+    name: 'WRATH',
+    tint: '#3A2410',
+    rails: [
+      [   0,  340, 360, 380],
+      [ 540,  700, 360, 340],
+      [ 900, 1060, 330, 340],
+      [1240, 1400, 320, 310],
+      [1580, 1740, 310, 300],
+      [1920, 2100, 310, 320],
+      [2260, 2360, 330, 340],
+    ],
+    portal: [2320, 340],
+    hazard: { type: 'wrath', riseRate: 72, startDelay: 0.6 },
+  },
+  // 5 — GREED: collect more than `limit` coins and the portal slams shut.
+  {
+    name: 'GREED',
+    tint: '#2A240A',
+    rails: [
+      [   0,  320, 420, 420],
+      [ 400,  600, 400, 380],
+      [ 680,  880, 360, 340],
+      [ 960, 1160, 320, 300],
+      [1240, 1440, 280, 260],
+      [1520, 1720, 240, 240],
+      [1820, 2020, 250, 280],
+      [2120, 2360, 300, 330],
+    ],
+    portal: [2320, 330],
+    hazard: {
+      type: 'greed',
+      limit: 3,
+      coins: [
+        { x:  140, y: 390 }, { x:  250, y: 390 },
+        { x:  500, y: 370 }, { x:  560, y: 365 },
+        { x:  760, y: 330 }, { x:  820, y: 325 },
+        { x: 1040, y: 295 }, { x: 1110, y: 290 },
+        { x: 1320, y: 255 }, { x: 1400, y: 245 },
+        { x: 1600, y: 215 }, { x: 1680, y: 215 },
+        { x: 1900, y: 230 }, { x: 1980, y: 250 },
+        { x: 2200, y: 290 }, { x: 2280, y: 310 },
+      ],
+    },
+  },
+  // 6 — GLUTTONY: slush-covered rail segments halve your speed on contact.
+  {
+    name: 'GLUTTONY',
+    tint: '#1A2A2A',
+    rails: [
+      [   0,  400, 370, 370],
+      [ 260,  580, 220, 220],
+      [ 480,  820, 370, 370],
+      [ 720, 1060, 230, 230],
+      [ 900, 1240, 370, 370],
+      [1320, 1580, 360, 350],
+      [1660, 1900, 340, 330],
+      [1980, 2180, 330, 320],
+      [2260, 2360, 320, 320],
+    ],
+    portal: [2320, 320],
+    hazard: {
+      type: 'gluttony',
+      slowDur: 1.3,
+      slowFactor: 0.45,
+      slush: [
+        { railIdx: 0, t0: 0.55, t1: 0.95 },
+        { railIdx: 1, t0: 0.20, t1: 0.80 },
+        { railIdx: 3, t0: 0.30, t1: 0.90 },
+        { railIdx: 4, t0: 0.10, t1: 0.50 },
+        { railIdx: 6, t0: 0.30, t1: 0.70 },
+      ],
+    },
+  },
+  // 7 — LUST: horizontal wind gusts add to your jump arcs.
+  {
+    name: 'LUST',
+    tint: '#2A1030',
+    rails: [
+      [   0,  260, 360, 340],
+      [ 340,  540, 310, 290],
+      [ 620,  820, 280, 280],
+      [ 900, 1100, 290, 310],
+      [1180, 1380, 300, 280],
+      [1460, 1660, 280, 260],
+      [1740, 1940, 260, 270],
+      [2020, 2220, 280, 300],
+      [2300, 2360, 310, 310],
+    ],
+    portal: [2320, 310],
+    hazard: { type: 'lust', period: 2.8, amplitude: 140 },
+  },
+  // 8 — LIMBO: no hazards — but the exit is a bell you must strike at the peak of your jump.
+  {
+    name: 'LIMBO',
+    tint: '#151A2A',
+    rails: [
+      [   0,  600, 340, 330],
+      [ 720, 1180, 330, 320],
+      [1320, 1800, 320, 320],
+      [1900, 2380, 320, 320],
+    ],
+    finish: [2320, 320],
+    hazard: {
+      type: 'limbo',
+      bell: { x: 2440, y: 220, tolerance: 34, minSpeed: 440 },
+    },
+  },
+];
+
+// ============================================================
+// WORLD (flattened, derived from LAYERS)
+// ============================================================
+const WORLD = {
+  rails: [],        // {x1, y1, x2, y2, layerIdx, slope, invLen}
+  portals: [],      // {x, y, srcLayer, tgtLayer, tgtX, tgtY}
+  finish: null,     // {x, y}
+  spikeY: 0,
+  bottomY: 0,
+  worldW: 0,
+};
+
+function layerTopY(idx) { return (CFG.LAYER_COUNT - 1 - idx) * CFG.LAYER_H; }
+
+function buildWorld() {
+  WORLD.rails.length = 0;
+  WORLD.portals.length = 0;
+  WORLD.worldW = CFG.LAYER_WIDTH;
+
+  for (let i = 0; i < LAYERS.length; i++) {
+    const L = LAYERS[i];
+    const topY = layerTopY(i);
+    for (const r of L.rails) {
+      const x1 = r[0], x2 = r[1];
+      const y1 = topY + r[2], y2 = topY + r[3];
+      const dx = x2 - x1;
+      WORLD.rails.push({
+        x1, y1, x2, y2,
+        layerIdx: i,
+        slope: (y2 - y1) / dx,
+        invLen: 1 / dx,
+      });
+    }
+    if (L.portal) {
+      const srcX = L.portal[0];
+      const srcY = topY + L.portal[1];
+      const tgt = LAYERS[i + 1];
+      // Land on the START of the next layer's first rail
+      const firstRail = tgt.rails[0];
+      const tgtTopY = layerTopY(i + 1);
+      const tgtX = Math.min(firstRail[0] + 60, firstRail[1] - 40);
+      const tRel = (tgtX - firstRail[0]) / (firstRail[1] - firstRail[0]);
+      const tgtY = tgtTopY + firstRail[2] + (firstRail[3] - firstRail[2]) * tRel;
+      WORLD.portals.push({
+        x: srcX, y: srcY,
+        srcLayer: i, tgtLayer: i + 1,
+        tgtX, tgtY,
+      });
+    }
+    if (L.finish) {
+      WORLD.finish = { x: L.finish[0], y: topY + L.finish[1] };
+    }
+  }
+  WORLD.bottomY = CFG.LAYER_COUNT * CFG.LAYER_H;
+  WORLD.spikeY = WORLD.bottomY;
+}
+
+// Editor override: if the level editor saved a layer set, swap it in before buildWorld().
+let editorOverrideActive = false;
+try {
+  const saved = localStorage.getItem('railgrind.editorLevels');
+  if (saved) {
+    const parsed = JSON.parse(saved);
+    if (Array.isArray(parsed) && parsed.length === 9 && parsed.every(l => l && Array.isArray(l.rails))) {
+      LAYERS.length = 0;
+      for (const l of parsed) LAYERS.push(l);
+      editorOverrideActive = true;
+    }
+  }
+} catch (e) {}
+buildWorld();
+
+function railYAt(rail, x) {
+  const t = (x - rail.x1) * rail.invLen;
+  return rail.y1 + (rail.y2 - rail.y1) * t;
+}
+
+function currentLayerIdx(worldY) {
+  const i = CFG.LAYER_COUNT - 1 - Math.floor(worldY / CFG.LAYER_H);
+  return Math.max(0, Math.min(CFG.LAYER_COUNT - 1, i));
 }
 
 // ============================================================
-// === STATE ==================================================
+// STATE
 // ============================================================
 const S = {
-  state: 'title',        // title | playing | dying | over
+  state: 'title',
   stateTime: 0,
   playTime: 0,
-  camX: 0,
-  speed: CFG.SPEED_BASE,
+  titleBob: 0,
 
-  cartY: CFG.RAIL_Y,
-  cartVY: 0,
-  cartOnRail: true,
+  cartX: 0, cartY: 0, cartVX: 0, cartVY: 0, cartRot: 0,
+  prevCartX: 0, prevCartY: 0, prevRot: 0,
+  currentRail: null,   // the rail the cart is on, null if airborne
+  airborne: false,
   coyote: 0,
   jumpBuffer: 0,
+  portalCooldown: 0,
 
-  // Interpolation snapshots
-  prevCamX: 0,
-  prevCartY: CFG.RAIL_Y,
-
-  // World stream
-  tiles: [],             // boolean array; tiles[0] = rail at firstTileIdx
-  firstTileIdx: 0,
-  nextChunkTile: 0,
-  enemies: [],           // { tileIdx, bob, alive }
-  lastNonFlat: false,
-  chunksSinceFlat: 0,
-
+  camX: 0, camY: 0,
   particles: [],
   shake: 0,
-  inputLock: 0,
   freezeFrame: 0,
 
-  distanceM: 0,
-  best: 0,
+  ghost: null,         // {x, y, age}
+
+  cartSquashStart: -99,
+  cartSquashType: '',   // 'land' or 'jump' or ''
+  cartSquashStrength: 0,
+
+  finalTime: 0,
+  bestTime: Infinity,
+  currentLayer: 0,
+  prevLayer: -1,
+  deepestLayer: 0,
+  lastRunEscaped: false,
+
+  initials: '',
+  scoreSubmitted: false,
+
+  inputLock: 0,
   muted: true,
-  titleBob: 0,
+
+  // Hazard banner (shown briefly when entering a new circle)
+  bannerText: '',
+  bannerSub: '',
+  bannerAt: -99,
+
+  // Mechanics runtime. Rebuilt per startGame().
+  mech: null,
 };
 
-try { S.best = parseInt(localStorage.getItem('railgrind.best') || '0') || 0; } catch (e) {}
+// Per-circle blurb shown in the entry banner.
+const HAZARD_BLURBS = {
+  treachery: 'DO NOT TRUST THE RAILS',
+  fraud:     'NOTHING YOU TOUCH IS REAL',
+  violence:  'DUCK THE SPIKE-RAIN',
+  heresy:    'LANDED RAILS CATCH FIRE',
+  wrath:     'OUTRUN THE TIDE',
+  greed:     'COLLECT NOTHING',
+  gluttony:  'AVOID THE SLUSH',
+  lust:      'BEWARE THE WIND',
+  limbo:     'STRIKE THE BELL AT APEX',
+};
+
+function makeMechState() {
+  const collapsed = new Set();       // rail refs (WORLD.rails entries) that have been destroyed
+  const crumbling = new Map();       // rail ref -> { startT } for fraud timers
+  const fire = new Map();            // rail ref -> [{ x, t }] ignition records (x in world px, t = playTime ignited)
+  const coinsTaken = new Set();      // "layerIdx:coinIdx"
+  const portalLocked = new Set();    // layer indices whose portal is locked
+  const violenceState = [];          // mirrors LAYERS[2].hazard.columns, with next-fire-at
+  const fallingSpikes = [];          // { x, y, vy, layerIdx, age, life }
+  const tide = { y: 0, active: false, armedAt: 0 };
+  const wind = { current: 0 };
+  const slowUntil = { t: 0 };
+  const limboState = { armed: true, judged: false };
+  return { collapsed, crumbling, fire, coinsTaken, portalLocked,
+           violenceState, fallingSpikes, tide, wind, slowUntil, limboState };
+}
+
+try {
+  const bt = parseFloat(localStorage.getItem('railgrind.best.time'));
+  if (isFinite(bt) && bt > 0) S.bestTime = bt;
+} catch (e) {}
 
 // ============================================================
-// === CANVAS / RESIZE ========================================
+// LEADERBOARD — completed runs only (escape-time ladder)
+// ============================================================
+const LEADERBOARD_API = 'https://voidtalker.com/games/api';
+let onlineScores = null;
+
+function getLocalScores() {
+  try { return JSON.parse(localStorage.getItem('railgrindScores') || '[]'); }
+  catch { return []; }
+}
+function rankScores(a, b) {
+  const aEsc = a.escaped ? 1 : 0, bEsc = b.escaped ? 1 : 0;
+  if (aEsc !== bEsc) return bEsc - aEsc;       // escapes above deaths
+  if (aEsc) return a.time - b.time;             // both escaped: fastest wins
+  const aL = a.layer | 0, bL = b.layer | 0;
+  if (aL !== bL) return bL - aL;                // both died: deepest wins
+  return b.time - a.time;                       // tied depth: longer survival wins
+}
+function saveLocalScore(ini, time, layer, escaped) {
+  const scores = getLocalScores();
+  scores.push({ ini, time, layer: layer | 0, escaped: escaped ? 1 : 0, date: Date.now() });
+  scores.sort(rankScores);
+  if (scores.length > 50) scores.length = 50;
+  try { localStorage.setItem('railgrindScores', JSON.stringify(scores)); } catch {}
+}
+function getScores() {
+  const online = (onlineScores || []).filter(s => s && s.time != null);
+  const list = online.length ? online.slice() : getLocalScores();
+  list.sort(rankScores);
+  return list;
+}
+async function fetchScores() {
+  if (!LEADERBOARD_API) { onlineScores = null; return; }
+  try {
+    const res = await fetch(LEADERBOARD_API + '/scores?game=railgrind');
+    if (res.ok) onlineScores = await res.json();
+  } catch { onlineScores = null; }
+}
+async function saveScore(ini, time, layer, escaped) {
+  saveLocalScore(ini, time, layer, escaped);
+  if (!LEADERBOARD_API) return;
+  try {
+    const res = await fetch(LEADERBOARD_API + '/scores?game=railgrind', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ini, time, layer: layer | 0, escaped: escaped ? 1 : 0 }),
+    });
+    if (res.ok) onlineScores = await res.json();
+  } catch { /* localStorage fallback already saved */ }
+}
+fetchScores();
+
+// ============================================================
+// CANVAS
 // ============================================================
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 let viewScale = 1, offsetX = 0, offsetY = 0, dpr = 1;
+let CANVAS_W = 960;     // dynamic — width of the logical canvas (game + sidebars)
+let GAME_X = 120;       // x offset of the game viewport within the canvas
+let sidebarMode = true; // false on narrow screens (mobile portrait)
 
 function resize() {
   dpr = Math.min(2, window.devicePixelRatio || 1);
   const vw = window.innerWidth, vh = window.innerHeight;
-  viewScale = Math.min(vw / CFG.W, vh / CFG.H);
-  const cw = CFG.W * viewScale, ch = CFG.H * viewScale;
-  offsetX = (vw - cw) / 2;
-  offsetY = (vh - ch) / 2;
+  // Only show sidebars when the viewport is meaningfully wider than 4:3 AND not too narrow.
+  // On mobile portrait / narrow screens, drop the sidebars to maximize play area.
+  const ar = vw / vh;
+  const isNarrow = ar < 1.45 || vw < 600;
+  sidebarMode = !isNarrow;
+  CANVAS_W = sidebarMode ? CFG.CANVAS_W_WIDE : CFG.W;
+  GAME_X = sidebarMode ? CFG.SIDEBAR_W : 0;
+  viewScale = Math.min(vw / CANVAS_W, vh / CFG.H);
   canvas.width = vw * dpr;
   canvas.height = vh * dpr;
   canvas.style.width = vw + 'px';
   canvas.style.height = vh + 'px';
+  offsetX = (vw - CANVAS_W * viewScale) / 2;
+  offsetY = (vh - CFG.H * viewScale) / 2;
 }
 window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', resize);
 resize();
 
 // ============================================================
-// === PATTERNS (halftone) ====================================
-// ============================================================
-let halftoneDark = null, halftonePink = null, halftoneCyan = null;
-function makeHalftone(color, size, dotR) {
-  const o = document.createElement('canvas');
-  o.width = size; o.height = size;
-  const c = o.getContext('2d');
-  c.fillStyle = color;
-  c.beginPath(); c.arc(size * 0.5, size * 0.5, dotR, 0, Math.PI * 2); c.fill();
-  c.beginPath(); c.arc(0, 0, dotR, 0, Math.PI * 2); c.fill();
-  c.beginPath(); c.arc(size, 0, dotR, 0, Math.PI * 2); c.fill();
-  c.beginPath(); c.arc(0, size, dotR, 0, Math.PI * 2); c.fill();
-  c.beginPath(); c.arc(size, size, dotR, 0, Math.PI * 2); c.fill();
-  return ctx.createPattern(o, 'repeat');
-}
-function initPatterns() {
-  halftoneDark = makeHalftone('rgba(10,10,15,0.40)', 10, 1.6);
-  halftonePink = makeHalftone('rgba(255,46,136,0.25)', 12, 1.8);
-  halftoneCyan = makeHalftone('rgba(0,229,255,0.22)', 14, 1.8);
-}
-
-// ============================================================
-// === INPUT ==================================================
+// INPUT
 // ============================================================
 let jumpPressed = false;
-
+let jumpHeld = false;
 function pressJump() {
   jumpPressed = true;
+  jumpHeld = true;
   if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
 }
-
+function releaseJump() {
+  jumpHeld = false;
+}
 window.addEventListener('keydown', e => {
+  // Initials entry intercepts most keys so typing doesn't pump the jump.
+  if (S.state === 'initials') {
+    if (e.code === 'Backspace') {
+      e.preventDefault();
+      if (S.initials.length > 0) S.initials = S.initials.slice(0, -1);
+      return;
+    }
+    if (e.code === 'Enter' || e.code === 'Space') {
+      e.preventDefault();
+      if (!e.repeat) submitInitials();
+      return;
+    }
+    if (e.code === 'Escape') {
+      e.preventDefault();
+      skipInitials();
+      return;
+    }
+    if (e.key && e.key.length === 1 && /[a-zA-Z]/.test(e.key) && S.initials.length < 3) {
+      e.preventDefault();
+      S.initials += e.key.toUpperCase();
+      return;
+    }
+    return;
+  }
   if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') {
     e.preventDefault();
     if (!e.repeat) pressJump();
   } else if (e.code === 'KeyM') {
     e.preventDefault();
     S.muted = !S.muted;
+  } else if (e.code === 'KeyR') {
+    if (S.state === 'over' || S.state === 'won') {
+      jumpPressed = true;
+    }
+  }
+}, { passive: false });
+window.addEventListener('keyup', e => {
+  if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') {
+    releaseJump();
   }
 }, { passive: false });
 canvas.addEventListener('mousedown', e => { e.preventDefault(); pressJump(); });
+window.addEventListener('mouseup', e => { releaseJump(); });
 canvas.addEventListener('touchstart', e => { e.preventDefault(); pressJump(); }, { passive: false });
+window.addEventListener('touchend', e => { releaseJump(); }, { passive: false });
+window.addEventListener('touchcancel', e => { releaseJump(); });
+window.addEventListener('blur', () => { releaseJump(); });
 window.addEventListener('contextmenu', e => e.preventDefault());
 
 // ============================================================
-// === AUDIO ==================================================
+// AUDIO
 // ============================================================
 let audioCtx = null;
-function beep(freq, dur, type = 'square', vol = 0.08, slideTo = null) {
+function beep(freq, dur, type = 'square', vol = 0.06, slideTo = null) {
   if (S.muted) return;
   try {
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -216,846 +623,2776 @@ function beep(freq, dur, type = 'square', vol = 0.08, slideTo = null) {
     o.start(t); o.stop(t + dur);
   } catch (e) {}
 }
-const sndJump = () => beep(420, 0.09, 'square', 0.07, 720);
-const sndLand = () => beep(160, 0.06, 'sine', 0.05);
+const sndJump = () => beep(250, 0.09, 'square', 0.06, 170);
+const sndLand = () => { beep(130, 0.09, 'sine', 0.05); beep(80, 0.12, 'square', 0.035); };
+const sndPortal = () => {
+  beep(440, 0.08, 'sine', 0.06, 880);
+  setTimeout(() => beep(660, 0.08, 'sine', 0.05, 1320), 50);
+  setTimeout(() => beep(990, 0.12, 'triangle', 0.045, 1760), 110);
+};
+const sndFall = () => beep(220, 0.5, 'sawtooth', 0.04, 60);
+const sndWin = () => {
+  beep(523, 0.14, 'square', 0.07);
+  setTimeout(() => beep(659, 0.14, 'square', 0.07), 120);
+  setTimeout(() => beep(784, 0.14, 'square', 0.07), 240);
+  setTimeout(() => beep(1047, 0.32, 'square', 0.08), 360);
+};
 function sndDeath() {
-  beep(320, 0.15, 'sawtooth', 0.09, 140);
-  setTimeout(() => beep(200, 0.22, 'square', 0.08, 80), 90);
-  setTimeout(() => beep(90, 0.35, 'sawtooth', 0.08, 50), 250);
+  beep(220, 0.18, 'sawtooth', 0.08, 90);
+  setTimeout(() => beep(140, 0.3, 'square', 0.07, 50), 120);
+  setTimeout(() => beep(70, 0.5, 'sawtooth', 0.06, 35), 320);
 }
 
 // ============================================================
-// === CHUNKS =================================================
+// NEON TEXT
 // ============================================================
-function pushChunk(length, gapStart, gapLen, enemyOffsets) {
-  const startIdx = S.nextChunkTile;
-  const baseLocal = startIdx - S.firstTileIdx;
-  for (let i = 0; i < length; i++) {
-    let solid = true;
-    if (gapStart != null && i >= gapStart && i < gapStart + gapLen) solid = false;
-    S.tiles[baseLocal + i] = solid;
-  }
-  if (enemyOffsets) {
-    for (const off of enemyOffsets) {
-      S.enemies.push({
-        tileIdx: startIdx + off,
-        bob: Math.random() * Math.PI * 2,
-        alive: true,
-      });
+const NEON_WORDS_BY_LAYER = [
+  ['PIT', 'SPIKES', '↓↓↓', 'NO EXIT', 'ICE'],
+  ['LIARS', 'FRAUD', 'SHAFT', 'DEEP'],
+  ['BLOOD', 'RAGE', '666', 'RUIN'],
+  ['VOID', 'SIN', 'HERESY', '7TH'],
+  ['WRATH', 'FURY', 'BURN', '↑'],
+  ['GOLD', 'GREED', 'DEBT'],
+  ['FEAST', 'GORGE', 'HUNGRY'],
+  ['LUST', 'SWIRL', 'WIND'],
+  ['LIMBO', 'SKY', 'EXIT', 'HOME'],
+];
+const NEON_COLORS = ['#5CFFEA', '#FFAE3A', '#FF4F7A', '#B080FF'];
+
+function prng(n) {
+  const x = Math.sin(n * 9301.23 + 49297.13) * 233280;
+  return x - Math.floor(x);
+}
+
+const neonCache = new Map();
+function getNeonSprite(text, size, color) {
+  const key = text + '|' + size + '|' + color;
+  const cached = neonCache.get(key);
+  if (cached) return cached;
+  const pad = Math.ceil(size * 1.2);
+  const off = document.createElement('canvas');
+  const c = off.getContext('2d');
+  c.font = `900 ${size}px Impact, "Arial Black", system-ui, sans-serif`;
+  const m = c.measureText(text);
+  const w = Math.max(2, Math.ceil(m.width) + pad * 2);
+  const h = Math.ceil(size * 1.6) + pad * 2;
+  off.width = w; off.height = h;
+  c.font = `900 ${size}px Impact, "Arial Black", system-ui, sans-serif`;
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  const cx = w * 0.5, cy = h * 0.5;
+  c.shadowColor = color;
+  c.shadowBlur = size * 1.1;
+  c.fillStyle = color;
+  c.fillText(text, cx, cy);
+  c.shadowBlur = size * 0.6;
+  c.fillText(text, cx, cy);
+  c.shadowBlur = size * 0.3;
+  c.fillText(text, cx, cy);
+  c.shadowBlur = 0;
+  c.fillStyle = '#FFFFFF';
+  c.fillText(text, cx, cy);
+  const sprite = { canvas: off, w, h };
+  neonCache.set(key, sprite);
+  return sprite;
+}
+
+function drawNeonText(text, x, y, size, color, rot) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rot);
+  ctx.font = `900 ${size}px Impact, "Arial Black", system-ui, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = color;
+  ctx.shadowBlur = size * 0.7;
+  ctx.fillStyle = color;
+  ctx.fillText(text, 0, 0);
+  ctx.shadowBlur = size * 0.35;
+  ctx.fillText(text, 0, 0);
+  ctx.shadowBlur = size * 0.15;
+  ctx.fillText(text, 0, 0);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillText(text, 0, 0);
+  ctx.restore();
+}
+
+// ============================================================
+// BACKGROUND
+// ============================================================
+function drawBackground() {
+  // Deep vertical gradient keyed to current layer tint
+  const layer = LAYERS[Math.max(0, Math.min(8, S.currentLayer))];
+  const tint = layer.tint;
+  const bg = ctx.createLinearGradient(0, 0, 0, CFG.H);
+  bg.addColorStop(0, CFG.C_BG_DEEP);
+  bg.addColorStop(0.45, tint);
+  bg.addColorStop(1, CFG.C_EARTH_D);
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, CFG.W, CFG.H);
+
+  // Parallax cave ceilings (drift up when falling)
+  drawRockLayer(0.12, 30, 0, '#0A0718');
+  drawRockLayer(0.26, 60, 0, '#08051A');
+
+  // Per-layer neon graffiti — draw for visible layers
+  drawNeonForVisibleLayers();
+
+  // Rock silhouettes bottom
+  drawRockLayer(0.18, 90, CFG.H, '#09061A');
+  drawRockLayer(0.38, 140, CFG.H, '#090614');
+}
+
+function drawRockLayer(par, amp, baseScreenY, color) {
+  const offX = S.camX * par;
+  const offY = S.camY * par;
+  const step = 150;
+  const startX = -160 - (((offX % step) + step) % step);
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  if (baseScreenY < CFG.H * 0.5) {
+    ctx.moveTo(-40, -60);
+    for (let x = startX; x < CFG.W + step + 40; x += step) {
+      const n = Math.floor((x + offX) / step);
+      const h1 = amp * (0.35 + 0.65 * prng(n * 0.73));
+      const h2 = amp * (0.2 + 0.8 * prng(n * 1.37 + 0.4));
+      ctx.lineTo(x, baseScreenY - offY * 0.3 + h1);
+      ctx.lineTo(x + step * 0.4, baseScreenY - offY * 0.3 + h2 * 1.3);
+      ctx.lineTo(x + step * 0.6, baseScreenY - offY * 0.3 + h1);
     }
-  }
-  S.nextChunkTile += length;
-}
-
-function generateChunk() {
-  const m = S.distanceM;
-
-  // Allowed types at this difficulty
-  const allowed = ['flat', 'gap'];
-  if (m > CFG.ENEMY_UNLOCK_M) allowed.push('enemy');
-  if (m > CFG.GAPENEMY_UNLOCK_M) allowed.push('gapenemy');
-
-  // Force flat after FLAT_EVERY non-flats, and in early game avoid back-to-back
-  let type;
-  if (S.chunksSinceFlat >= CFG.FLAT_EVERY) {
-    type = 'flat';
-  } else if (m < CFG.EARLY_METERS && S.lastNonFlat) {
-    type = 'flat';
+    ctx.lineTo(CFG.W + 80, -60);
   } else {
-    const weights = {
-      flat:     m < 200 ? 3.0 : (m < 600 ? 2.0 : 1.5),
-      gap:      m < 100 ? 0.5 : (m < 500 ? 1.2 : 1.5),
-      enemy:    m < CFG.ENEMY_UNLOCK_M ? 0 : (m < 1500 ? 1.2 : 1.5),
-      gapenemy: m < CFG.GAPENEMY_UNLOCK_M ? 0 : 1.3,
-    };
-    let total = 0;
-    for (const k of allowed) total += weights[k];
-    let r = Math.random() * total;
-    for (const k of allowed) {
-      r -= weights[k];
-      if (r <= 0) { type = k; break; }
+    ctx.moveTo(-40, CFG.H + 60);
+    for (let x = startX; x < CFG.W + step + 40; x += step) {
+      const n = Math.floor((x + offX) / step) + 17;
+      const h1 = amp * (0.35 + 0.65 * prng(n * 0.73));
+      const h2 = amp * (0.2 + 0.8 * prng(n * 1.37 + 0.4));
+      ctx.lineTo(x, baseScreenY - offY * 0.3 - h1);
+      ctx.lineTo(x + step * 0.5, baseScreenY - offY * 0.3 - h2 * 1.2);
     }
-    if (!type) type = 'flat';
+    ctx.lineTo(CFG.W + 80, CFG.H + 60);
   }
-
-  S.lastNonFlat = type !== 'flat';
-  S.chunksSinceFlat = type === 'flat' ? 0 : S.chunksSinceFlat + 1;
-
-  // SOLVABILITY CLAMP: gap width strictly below max jumpable at current speed
-  const maxGap = Math.min(CFG.GAP_MAX_TILES_CAP, maxJumpableTiles(S.speed));
-
-  if (type === 'flat') {
-    const len = CFG.CHUNK_FLAT_MIN + Math.floor(Math.random() * (CFG.CHUNK_FLAT_MAX - CFG.CHUNK_FLAT_MIN + 1));
-    pushChunk(len);
-  } else if (type === 'gap') {
-    const gapLen = CFG.GAP_MIN + Math.floor(Math.random() * Math.max(1, maxGap - CFG.GAP_MIN + 1));
-    const leftRun = 3 + Math.floor(Math.random() * 3);
-    const rightRun = 3 + Math.floor(Math.random() * 3);
-    pushChunk(leftRun + gapLen + rightRun, leftRun, gapLen);
-  } else if (type === 'enemy') {
-    const len = 8 + Math.floor(Math.random() * 4);
-    const off = 3 + Math.floor(Math.random() * Math.max(1, len - 5));
-    pushChunk(len, null, 0, [off]);
-  } else if (type === 'gapenemy') {
-    const gapLen = CFG.GAP_MIN + Math.floor(Math.random() * Math.max(1, maxGap - CFG.GAP_MIN));
-    const leftRun = 3 + Math.floor(Math.random() * 3);
-    const rightRun = 4 + Math.floor(Math.random() * 3);
-    const len = leftRun + gapLen + rightRun;
-    const off = leftRun + gapLen + 1 + Math.floor(Math.random() * 2);
-    pushChunk(len, leftRun, gapLen, [off]);
-  }
+  ctx.closePath();
+  ctx.fill();
 }
 
-function ensureWorldAhead() {
-  const rightEdgeTile = Math.ceil((S.camX + CFG.W + 240) / CFG.TILE);
-  let safety = 0;
-  while (S.nextChunkTile < rightEdgeTile && safety++ < 40) generateChunk();
-}
-
-function cullWorldBehind() {
-  const leftTile = Math.floor((S.camX - 200) / CFG.TILE);
-  const toRemove = leftTile - S.firstTileIdx;
-  if (toRemove > 60) {
-    S.tiles.splice(0, toRemove);
-    S.firstTileIdx += toRemove;
+function drawNeonForVisibleLayers() {
+  // Figure out which layer Y ranges are visible on screen
+  const topWorldY = S.camY;
+  const botWorldY = S.camY + CFG.H;
+  const loL = Math.max(0, currentLayerIdx(botWorldY));
+  const hiL = Math.min(CFG.LAYER_COUNT - 1, currentLayerIdx(topWorldY));
+  for (let L = loL; L <= hiL; L++) {
+    const words = NEON_WORDS_BY_LAYER[L];
+    const layerTop = layerTopY(L);
+    const layerBot = layerTop + CFG.LAYER_H;
+    const spacing = 420;
+    const off = S.camX * 0.22;
+    const start = Math.floor((off - 260) / spacing);
+    const end = Math.floor((off + CFG.W + 260) / spacing);
+    for (let i = start; i <= end; i++) {
+      const seed = prng(i * 13.7 + L * 91.1 + 4.9);
+      if (seed < 0.35) continue;
+      const text = words[(prng(i * 2.11 + L) * words.length) | 0];
+      const color = NEON_COLORS[(prng(i * 5.33 + L * 1.3) * NEON_COLORS.length) | 0];
+      const sizeRaw = 18 + prng(i * 3.1 + L) * 22;
+      const size = Math.max(10, 4 * Math.round(sizeRaw / 4));
+      const rot = (prng(i * 8.2 + L) - 0.5) * 0.3;
+      const yRel = prng(i * 7.11 + L * 0.7) * (CFG.LAYER_H - 120) + 40;
+      const worldY = layerTop + yRel;
+      const xJitter = (prng(i * 4.27 + L) - 0.5) * spacing * 0.5;
+      const worldX = i * spacing + xJitter;
+      const screenX = worldX - S.camX * 0.22;
+      const screenY = worldY - S.camY * 0.4;
+      if (screenX < -240 || screenX > CFG.W + 240) continue;
+      if (screenY < -80 || screenY > CFG.H + 80) continue;
+      const sprite = getNeonSprite(text, size, color);
+      ctx.save();
+      ctx.translate(screenX, screenY);
+      ctx.rotate(rot);
+      ctx.globalAlpha = 0.65;
+      ctx.drawImage(sprite.canvas, -sprite.w * 0.5, -sprite.h * 0.5);
+      ctx.restore();
+    }
   }
-  S.enemies = S.enemies.filter(e => (e.tileIdx + 2) * CFG.TILE > S.camX - 120);
-}
-
-function isSolidAt(worldX) {
-  const idx = Math.floor(worldX / CFG.TILE);
-  const local = idx - S.firstTileIdx;
-  if (local < 0 || local >= S.tiles.length) return false;
-  return !!S.tiles[local];
 }
 
 // ============================================================
-// === PHYSICS ================================================
+// WALLS — thin decorative cave walls at the horizontal edges of the world
 // ============================================================
-function physicsStep(dt) {
-  if (S.state !== 'playing') return;
+function drawWalls() {
+  // Left wall
+  drawWall(0);
+  // Right wall
+  drawWall(WORLD.worldW);
+}
 
-  S.prevCamX = S.camX;
-  S.prevCartY = S.cartY;
+function drawWall(worldX) {
+  const sx = worldX - S.camX;
+  if (sx < -120 || sx > CFG.W + 120) return;
+  const topScreen = 0 - S.camY + (-200);
+  const botScreen = WORLD.bottomY - S.camY + 40;
+  const y0 = Math.max(-40, topScreen);
+  const y1 = Math.min(CFG.H + 40, botScreen);
+  if (y1 < y0) return;
+  const grad = ctx.createLinearGradient(sx - 50, 0, sx + 50, 0);
+  grad.addColorStop(0, 'rgba(0,0,0,0.0)');
+  grad.addColorStop(0.35, 'rgba(14,10,20,0.55)');
+  grad.addColorStop(1, 'rgba(8,6,14,0.9)');
+  ctx.fillStyle = grad;
+  const dir = worldX === 0 ? -1 : 1;
+  ctx.fillRect(sx + (dir < 0 ? -80 : 0), y0, 80, y1 - y0);
+  // Jagged rock edge
+  ctx.fillStyle = '#0E0A14';
+  ctx.beginPath();
+  ctx.moveTo(sx, y0);
+  const step = 50;
+  for (let y = y0; y < y1; y += step) {
+    const n = Math.floor(y / step) + (worldX === 0 ? 5 : 9);
+    const jut = 18 + prng(n * 0.7) * 30;
+    ctx.lineTo(sx + jut * dir, y + step * 0.3);
+    ctx.lineTo(sx + (jut + 10) * dir, y + step * 0.5);
+    ctx.lineTo(sx + jut * 0.4 * dir, y + step * 0.8);
+  }
+  ctx.lineTo(sx, y1);
+  ctx.closePath();
+  ctx.fill();
+}
 
-  S.playTime += dt;
-  S.speed = Math.min(CFG.SPEED_CAP, CFG.SPEED_BASE + S.playTime * CFG.SPEED_RAMP);
+// ============================================================
+// RAILS
+// ============================================================
+function drawRails() {
+  // Filter to rails whose screen bounds intersect the viewport
+  const vL = S.camX - 40, vR = S.camX + CFG.W + 40;
+  const vT = S.camY - 40, vB = S.camY + CFG.H + 80;
+  const collapsed = S.mech ? S.mech.collapsed : null;
+  const crumbling = S.mech ? S.mech.crumbling : null;
+  for (const r of WORLD.rails) {
+    if (collapsed && collapsed.has(r)) continue;
+    if (r.x2 < vL || r.x1 > vR) continue;
+    const minY = Math.min(r.y1, r.y2);
+    const maxY = Math.max(r.y1, r.y2);
+    if (maxY < vT - 40 || minY > vB + 40) continue;
+    let shakeX = 0, shakeY = 0;
+    if (crumbling && crumbling.has(r)) {
+      // Rail that has been landed on in FRAUD — shake visibly to warn
+      const info = crumbling.get(r);
+      const age = S.playTime - info.startT;
+      const L = LAYERS[r.layerIdx];
+      const delay = (L && L.hazard && L.hazard.crumbleDelay) ? L.hazard.crumbleDelay : 0.42;
+      const t = Math.min(1, age / delay);
+      const amp = 1 + t * 3;
+      shakeX = (Math.random() - 0.5) * amp;
+      shakeY = (Math.random() - 0.5) * amp;
+    }
+    if (shakeX || shakeY) {
+      ctx.save();
+      ctx.translate(shakeX, shakeY);
+      drawRail(r);
+      ctx.restore();
+    } else {
+      drawRail(r);
+    }
+  }
+}
 
-  S.camX += S.speed * dt;
-  S.distanceM = S.camX * CFG.M_PER_PX;
+function drawRail(rail) {
+  // Impact bob: the rail is pushed down on hit and rings out with damped cosine.
+  // We apply a uniform Y-offset (whole rail moves together) to avoid breaking the
+  // plank / post drawing. Strength falls off over ~0.55s.
+  const bob = railImpactBob(rail, rail.impactT ?? 0.5);
+  const x1 = rail.x1 - S.camX;
+  const x2 = rail.x2 - S.camX;
+  const y1 = rail.y1 - S.camY + bob;
+  const y2 = rail.y2 - S.camY + bob;
 
-  // Input -> buffer
-  if (jumpPressed) {
-    S.jumpBuffer = CFG.JUMP_BUFFER;
-    jumpPressed = false;
+  // Drop-shadow / support chains going down into darkness
+  ctx.strokeStyle = 'rgba(18,14,26,0.8)';
+  ctx.lineWidth = 2;
+  const chainCount = 3;
+  for (let i = 1; i <= chainCount; i++) {
+    const t = i / (chainCount + 1);
+    const cx = x1 + (x2 - x1) * t;
+    const cy = y1 + (y2 - y1) * t;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy + 12);
+    ctx.lineTo(cx, cy + 120);
+    ctx.stroke();
   }
 
-  // Gravity + vertical motion
-  const wasOnRail = S.cartOnRail;
-  S.cartVY += CFG.GRAVITY * dt;
-  S.cartY += S.cartVY * dt;
+  // Wood plank (tie)
+  const angle = Math.atan2(y2 - y1, x2 - x1);
+  const len = Math.hypot(x2 - x1, y2 - y1);
+  ctx.save();
+  ctx.translate(x1, y1);
+  ctx.rotate(angle);
+  ctx.fillStyle = CFG.C_WOOD_D;
+  ctx.fillRect(0, 3, len, 15);
+  ctx.fillStyle = CFG.C_WOOD;
+  ctx.fillRect(0, 3, len, 7);
+  // Plank grooves
+  ctx.strokeStyle = CFG.C_WOOD_D;
+  ctx.lineWidth = 1;
+  for (let px = 14; px < len - 4; px += 20) {
+    ctx.beginPath();
+    ctx.moveTo(px, 4);
+    ctx.lineTo(px, 17);
+    ctx.stroke();
+  }
+  ctx.strokeStyle = CFG.C_BLACK;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(0, 3, len, 15);
+  ctx.restore();
 
-  const cartWorldX = S.camX + CFG.CART_SCREEN_X;
-  const solidBelow = isSolidAt(cartWorldX);
+  // Iron rail on top
+  ctx.strokeStyle = CFG.C_BLACK;
+  ctx.lineWidth = 7;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
+  ctx.stroke();
+  ctx.strokeStyle = CFG.C_RAIL;
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
+  ctx.stroke();
+  ctx.strokeStyle = CFG.C_RAIL_HI;
+  ctx.lineWidth = 1.6;
+  const nx = -Math.sin(angle), ny = Math.cos(angle);
+  ctx.beginPath();
+  ctx.moveTo(x1 + nx * 1.8, y1 + ny * -1.6);
+  ctx.lineTo(x2 + nx * 1.8, y2 + ny * -1.6);
+  ctx.stroke();
 
-  if (S.cartVY >= 0 && S.cartY >= CFG.RAIL_Y && solidBelow) {
-    // Landed on solid rail
-    if (!wasOnRail && S.cartVY > 80) {
-      sndLand();
-      for (let i = 0; i < 8; i++) {
-        const sp = 60 + Math.random() * 140;
-        const ang = -Math.PI * (0.15 + Math.random() * 0.7);
+  // End posts
+  ctx.fillStyle = CFG.C_WOOD;
+  ctx.strokeStyle = CFG.C_BLACK;
+  ctx.lineWidth = 2;
+  ctx.fillRect(x1 - 3, y1 + 2, 6, 20);
+  ctx.strokeRect(x1 - 3, y1 + 2, 6, 20);
+  ctx.fillRect(x2 - 3, y2 + 2, 6, 20);
+  ctx.strokeRect(x2 - 3, y2 + 2, 6, 20);
+}
+
+// ============================================================
+// PORTALS
+// ============================================================
+function drawPortals() {
+  for (const p of WORLD.portals) {
+    const sx = p.x - S.camX;
+    const sy = p.y - S.camY;
+    if (sx < -80 || sx > CFG.W + 80) continue;
+    if (sy < -80 || sy > CFG.H + 120) continue;
+    drawPortal(sx, sy, S.playTime + p.srcLayer * 0.7);
+  }
+}
+
+function drawPortal(sx, sy, phase) {
+  // Upward light column showing the catch zone
+  ctx.save();
+  const beamTop = sy - 240;
+  const beamBot = sy - 10;
+  const beamGrad = ctx.createLinearGradient(0, beamTop, 0, beamBot);
+  beamGrad.addColorStop(0, 'rgba(155,123,255,0)');
+  beamGrad.addColorStop(0.75, 'rgba(155,123,255,0.18)');
+  beamGrad.addColorStop(1, 'rgba(232,218,255,0.40)');
+  ctx.fillStyle = beamGrad;
+  const beamPulse = 0.85 + 0.15 * Math.sin(phase * 3);
+  const bw = 54 * beamPulse;
+  ctx.fillRect(sx - bw * 0.5, beamTop, bw, beamBot - beamTop);
+  // Upward-drifting sparkles in the beam
+  for (let i = 0; i < 4; i++) {
+    const t = ((phase * 0.8 + i * 0.25) % 1);
+    const sy2 = beamBot - t * (beamBot - beamTop);
+    const sx2 = sx + Math.sin(phase * 2 + i * 1.7) * 12;
+    ctx.globalAlpha = 0.8 * (1 - t);
+    ctx.fillStyle = '#E8DAFF';
+    ctx.fillRect(sx2 - 1.5, sy2 - 1.5, 3, 3);
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+
+  // Rocky tunnel ring + swirling light
+  ctx.save();
+  ctx.translate(sx, sy - 10);
+
+  // Outer rock mouth
+  ctx.fillStyle = '#0A0812';
+  ctx.beginPath();
+  ctx.arc(0, 0, CFG.PORTAL_R + 10, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Jagged rocky border
+  ctx.fillStyle = '#1A121E';
+  ctx.beginPath();
+  const rings = 16;
+  for (let i = 0; i <= rings; i++) {
+    const a = (i / rings) * Math.PI * 2;
+    const jut = 1 + 0.12 * Math.sin(i * 1.7 + phase * 0.5);
+    const r = (CFG.PORTAL_R + 8) * jut;
+    const x = Math.cos(a) * r, y = Math.sin(a) * r;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fill();
+
+  // Inner deep darkness
+  const gradD = ctx.createRadialGradient(0, 0, 3, 0, 0, CFG.PORTAL_R);
+  gradD.addColorStop(0, '#1A1030');
+  gradD.addColorStop(0.55, '#06050C');
+  gradD.addColorStop(1, '#030309');
+  ctx.fillStyle = gradD;
+  ctx.beginPath();
+  ctx.arc(0, 0, CFG.PORTAL_R, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Violet glow ring (swirling)
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < 3; i++) {
+    const a = phase * 1.5 + i * 2.1;
+    ctx.rotate(0.1);
+    ctx.strokeStyle = i === 0 ? CFG.C_PORTAL : CFG.C_PORTAL_HI;
+    ctx.lineWidth = 3 - i * 0.8;
+    ctx.globalAlpha = 0.7 - i * 0.2;
+    ctx.beginPath();
+    ctx.arc(0, 0, CFG.PORTAL_R - 6 - i * 6, a, a + Math.PI * 1.3);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // Sparkles
+  for (let i = 0; i < 5; i++) {
+    const a = phase * 2 + i * 1.25;
+    const r = CFG.PORTAL_R * (0.4 + 0.5 * ((Math.sin(phase * 3 + i) + 1) * 0.5));
+    const x = Math.cos(a) * r, y = Math.sin(a) * r * 0.9;
+    ctx.fillStyle = CFG.C_PORTAL_HI;
+    ctx.globalAlpha = 0.85;
+    ctx.fillRect(x - 1.2, y - 1.2, 2.4, 2.4);
+  }
+  ctx.globalAlpha = 1;
+
+  // Up arrow inside
+  ctx.fillStyle = CFG.C_PORTAL_HI;
+  ctx.globalAlpha = 0.55 + 0.35 * Math.sin(phase * 4);
+  ctx.beginPath();
+  ctx.moveTo(0, -20);
+  ctx.lineTo(10, -6);
+  ctx.lineTo(4, -6);
+  ctx.lineTo(4, 10);
+  ctx.lineTo(-4, 10);
+  ctx.lineTo(-4, -6);
+  ctx.lineTo(-10, -6);
+  ctx.closePath();
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  ctx.restore();
+}
+
+// ============================================================
+// SPIKE PIT
+// ============================================================
+function drawSpikePit() {
+  const topScreen = WORLD.spikeY - S.camY;
+  if (topScreen > CFG.H + 20) return;
+
+  // Ominous glow before spikes
+  const glowGrad = ctx.createLinearGradient(0, topScreen - 140, 0, topScreen);
+  glowGrad.addColorStop(0, 'rgba(255,30,60,0)');
+  glowGrad.addColorStop(1, 'rgba(255,40,70,0.25)');
+  ctx.fillStyle = glowGrad;
+  ctx.fillRect(0, topScreen - 140, CFG.W, 140);
+
+  // Dark pit floor
+  ctx.fillStyle = '#120608';
+  ctx.fillRect(0, topScreen, CFG.W, CFG.H - topScreen + 40);
+
+  // Spikes — big and serrated, across the screen
+  const sp = 36;
+  const baseY = topScreen + CFG.SPIKE_H;
+  const leftWorld = S.camX;
+  const startI = Math.floor(leftWorld / sp) - 1;
+  const endI = Math.ceil((leftWorld + CFG.W) / sp) + 1;
+  for (let i = startI; i <= endI; i++) {
+    const worldX = i * sp;
+    const sx = worldX - S.camX;
+    const jut = prng(i * 0.91) * 10;
+    ctx.fillStyle = CFG.C_SPIKE;
+    ctx.beginPath();
+    ctx.moveTo(sx, baseY);
+    ctx.lineTo(sx + sp * 0.5, topScreen - jut);
+    ctx.lineTo(sx + sp, baseY);
+    ctx.closePath();
+    ctx.fill();
+    // Highlight edge
+    ctx.strokeStyle = CFG.C_SPIKE_HI;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(sx + sp * 0.5, topScreen - jut);
+    ctx.lineTo(sx + sp, baseY);
+    ctx.stroke();
+    ctx.strokeStyle = CFG.C_BLACK;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(sx, baseY);
+    ctx.lineTo(sx + sp * 0.5, topScreen - jut);
+    ctx.lineTo(sx + sp, baseY);
+    ctx.stroke();
+  }
+
+  // Bone pile base
+  ctx.fillStyle = '#050307';
+  ctx.fillRect(0, baseY, CFG.W, CFG.H - baseY + 40);
+}
+
+// ============================================================
+// FINISH LINE
+// ============================================================
+function drawFinish() {
+  if (!WORLD.finish) return;
+  const sx = WORLD.finish.x - S.camX;
+  const sy = WORLD.finish.y - S.camY;
+  if (sx < -80 || sx > CFG.W + 80) return;
+
+  // Pole
+  ctx.fillStyle = '#D0C8B8';
+  ctx.strokeStyle = CFG.C_BLACK;
+  ctx.lineWidth = 2;
+  ctx.fillRect(sx - 2, sy - 120, 4, 128);
+  ctx.strokeRect(sx - 2, sy - 120, 4, 128);
+
+  // Waving checkered flag
+  const t = S.playTime * 3;
+  const flagW = 54, flagH = 32;
+  ctx.save();
+  ctx.translate(sx + 2, sy - 114);
+  const cols = 6, rows = 4;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const on = (r + c) % 2 === 0;
+      const cellW = flagW / cols, cellH = flagH / rows;
+      const x = c * cellW;
+      const y = r * cellH;
+      const wave = Math.sin(t + c * 0.8) * 3;
+      ctx.fillStyle = on ? '#FFFFFF' : '#0A0A10';
+      ctx.fillRect(x, y + wave, cellW + 0.5, cellH + 0.5);
+    }
+  }
+  ctx.strokeStyle = CFG.C_BLACK;
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(0, 0, flagW, flagH);
+  ctx.restore();
+
+  // "EXIT" neon above
+  drawNeonText('EXIT', sx, sy - 150, 24, CFG.C_NEON_C, 0);
+
+  // Finish line tape across the rails
+  const beamTop = sy - 20;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const glow = ctx.createLinearGradient(sx - 4, beamTop, sx + 4, beamTop + 80);
+  glow.addColorStop(0, 'rgba(255,220,120,0.8)');
+  glow.addColorStop(1, 'rgba(255,220,120,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(sx - 10, beamTop, 20, 80);
+  ctx.restore();
+  ctx.strokeStyle = '#FFE38A';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 4]);
+  ctx.beginPath();
+  ctx.moveTo(sx, beamTop);
+  ctx.lineTo(sx, beamTop + 80);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+// ============================================================
+// HAZARD VISUALS (drawn in world-space after rails)
+// ============================================================
+function drawHazards() {
+  if (!S.mech) return;
+  // The drawing order matters only to taste — hazards near the foreground are
+  // drawn later. We draw each layer's hazard visuals if any part of the layer
+  // is visible.
+  const topWorldY = S.camY - 40;
+  const botWorldY = S.camY + CFG.H + 40;
+
+  for (let li = 0; li < LAYERS.length; li++) {
+    const L = LAYERS[li];
+    const hz = L.hazard;
+    if (!hz) continue;
+    const topY = layerTopY(li);
+    const botY = topY + CFG.LAYER_H;
+    if (botY < topWorldY || topY > botWorldY) continue;
+
+    if (hz.type === 'treachery') drawTreachery(li, hz);
+    else if (hz.type === 'heresy') drawHeresy(li, hz);
+    else if (hz.type === 'wrath')  drawWrath(li, hz);
+    else if (hz.type === 'violence') drawViolence(li, hz);
+    else if (hz.type === 'greed') drawGreed(li, hz);
+    else if (hz.type === 'gluttony') drawGluttony(li, hz);
+    else if (hz.type === 'limbo') drawLimbo(li, hz);
+    // fraud has its visual built into drawRails (shake); no extra world visual
+    // lust is drawn in HUD (arrow)
+  }
+}
+
+function drawTreachery(li, hz) {
+  // Give traitor rails a cold shimmer tell — a frosted highlight over their top.
+  const traitorSet = new Set(hz.traitors || []);
+  const rails = railsOfLayer(li);
+  const t = S.playTime;
+  for (let i = 0; i < rails.length; i++) {
+    if (!traitorSet.has(i)) continue;
+    const r = rails[i];
+    if (S.mech.collapsed.has(r)) continue;
+    const x1 = r.x1 - S.camX;
+    const y1 = r.y1 - S.camY;
+    const x2 = r.x2 - S.camX;
+    const y2 = r.y2 - S.camY;
+    if (x2 < -40 || x1 > CFG.W + 40) continue;
+    const shimmer = 0.35 + 0.35 * Math.sin(t * 4 + i * 1.3);
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.strokeStyle = `rgba(170, 220, 255, ${shimmer})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1 - 2);
+    ctx.lineTo(x2, y2 - 2);
+    ctx.stroke();
+    // A faint snow dusting along the top
+    ctx.fillStyle = `rgba(220, 240, 255, ${0.3 * shimmer})`;
+    const steps = 10;
+    for (let s = 0; s < steps; s++) {
+      const ft = s / steps;
+      const fx = x1 + (x2 - x1) * ft;
+      const fy = y1 + (y2 - y1) * ft;
+      ctx.fillRect(fx - 1, fy - 3, 2, 2);
+    }
+    ctx.restore();
+  }
+}
+
+function drawHeresy(li, hz) {
+  // Fire creeps along rails from each ignition point.
+  const rails = railsOfLayer(li);
+  for (const r of rails) {
+    const arr = S.mech.fire.get(r);
+    if (!arr || arr.length === 0) continue;
+    for (const f of arr) {
+      const radius = f.ageRadius || 0;
+      const x0 = Math.max(r.x1, f.x - radius);
+      const x1 = Math.min(r.x2, f.x + radius);
+      const y0w = railYAt(r, x0);
+      const y1w = railYAt(r, x1);
+      const sx0 = x0 - S.camX, sy0 = y0w - S.camY;
+      const sx1 = x1 - S.camX, sy1 = y1w - S.camY;
+      if (sx1 < -40 || sx0 > CFG.W + 40) continue;
+      // Fire body
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      const grd = ctx.createLinearGradient(0, sy0 - 28, 0, sy0 + 4);
+      grd.addColorStop(0, 'rgba(255, 90, 30, 0)');
+      grd.addColorStop(0.45, 'rgba(255, 170, 40, 0.55)');
+      grd.addColorStop(1, 'rgba(255, 240, 120, 0.85)');
+      ctx.fillStyle = grd;
+      ctx.beginPath();
+      ctx.moveTo(sx0, sy0 + 2);
+      // wavy top edge
+      const samples = Math.max(6, Math.floor((sx1 - sx0) / 14));
+      for (let i = 0; i <= samples; i++) {
+        const t = i / samples;
+        const x = sx0 + (sx1 - sx0) * t;
+        const yb = sy0 + (sy1 - sy0) * t;
+        const height = 22 + Math.sin(t * 7 + S.playTime * 6 + (x * 0.05)) * 6;
+        ctx.lineTo(x, yb - height);
+      }
+      ctx.lineTo(sx1, sy1 + 2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+      // Embers
+      if (Math.random() < 0.4) {
         S.particles.push({
-          x: CFG.CART_SCREEN_X + (Math.random() - 0.5) * 20,
-          y: CFG.RAIL_Y,
-          vx: Math.cos(ang) * sp * 0.5 - 40,
-          vy: Math.sin(ang) * sp * 0.9,
-          life: 0.35 + Math.random() * 0.25,
-          maxLife: 0.6,
-          size: 5 + Math.random() * 3,
-          color: Math.random() < 0.5 ? CFG.C_YELLOW : CFG.C_CYAN,
-          rot: Math.random() * Math.PI,
-          rotV: (Math.random() - 0.5) * 12,
+          x: f.x + (Math.random() - 0.5) * (radius * 0.8),
+          y: y0w - 6,
+          vx: (Math.random() - 0.5) * 40,
+          vy: -80 - Math.random() * 80,
+          life: 0.5, maxLife: 0.7,
+          size: 2, color: Math.random() < 0.5 ? '#FF9040' : '#FFDC70',
+          rot: 0, rotV: 0,
         });
       }
     }
-    S.cartY = CFG.RAIL_Y;
-    S.cartVY = 0;
-    S.cartOnRail = true;
-  } else {
-    if (wasOnRail && S.cartVY >= 0) {
-      // Rolled off an edge — grant coyote window
-      S.coyote = CFG.COYOTE;
-    }
-    S.cartOnRail = false;
-
-    if (S.cartY > CFG.RAIL_Y + 240) {
-      die('fall');
-      return;
-    }
   }
-
-  S.coyote = Math.max(0, S.coyote - dt);
-  S.jumpBuffer = Math.max(0, S.jumpBuffer - dt);
-
-  // Jump (buffered + coyote)
-  if (S.jumpBuffer > 0 && (S.cartOnRail || S.coyote > 0)) {
-    S.cartVY = -CFG.JUMP_V;
-    S.cartOnRail = false;
-    S.coyote = 0;
-    S.jumpBuffer = 0;
-    sndJump();
-    for (let i = 0; i < 5; i++) {
-      S.particles.push({
-        x: CFG.CART_SCREEN_X - 8,
-        y: CFG.RAIL_Y - 4,
-        vx: -80 - Math.random() * 100,
-        vy: 30 + Math.random() * 70,
-        life: 0.3,
-        maxLife: 0.3,
-        size: 4 + Math.random() * 2,
-        color: CFG.C_CYAN,
-        rot: Math.random() * Math.PI,
-        rotV: (Math.random() - 0.5) * 10,
-      });
-    }
-  }
-
-  // Enemy collisions
-  for (const e of S.enemies) {
-    if (!e.alive) continue;
-    e.bob += dt;
-    const ex = (e.tileIdx + 0.5) * CFG.TILE;
-    const ey = CFG.RAIL_Y - 14;
-    const cx = cartWorldX;
-    const cy = S.cartY - CFG.CART_H * 0.5;
-    if (Math.abs(cx - ex) < 30 && Math.abs(cy - ey) < 22) {
-      die('enemy');
-      return;
-    }
-  }
-
-  // Particles
-  stepParticles(dt, 900);
-
-  // Shake decay
-  if (S.shake > 0) {
-    S.shake *= Math.pow(0.001, dt);
-    if (S.shake < 0.5) S.shake = 0;
-  }
-
-  ensureWorldAhead();
-  cullWorldBehind();
 }
 
+function drawWrath(li, hz) {
+  if (!S.mech.tide.active) return;
+  const tideY = S.mech.tide.y;
+  const topY = layerTopY(li);
+  const botY = topY + CFG.LAYER_H;
+  const sy = tideY - S.camY;
+  if (sy > CFG.H + 20) return;
+  // Blood surface
+  ctx.save();
+  const grd = ctx.createLinearGradient(0, sy - 40, 0, sy + 60);
+  grd.addColorStop(0, 'rgba(120, 14, 20, 0)');
+  grd.addColorStop(0.4, 'rgba(150, 20, 28, 0.7)');
+  grd.addColorStop(1, 'rgba(110, 10, 18, 0.95)');
+  ctx.fillStyle = grd;
+  // Wavy surface
+  ctx.beginPath();
+  ctx.moveTo(-40, sy + 80);
+  const steps = 24;
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const x = -40 + (CFG.W + 80) * t;
+    const y = sy + Math.sin(t * 6 + S.playTime * 2.2) * 4;
+    ctx.lineTo(x, y);
+  }
+  ctx.lineTo(CFG.W + 40, sy + 80);
+  ctx.lineTo(CFG.W + 40, CFG.H + 40);
+  ctx.lineTo(-40, CFG.H + 40);
+  ctx.closePath();
+  ctx.fill();
+  // Surface highlight
+  ctx.strokeStyle = 'rgba(230, 80, 80, 0.6)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const x = -40 + (CFG.W + 80) * t;
+    const y = sy + Math.sin(t * 6 + S.playTime * 2.2) * 4;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawViolence(li, hz) {
+  // Telegraphs — red shadow columns
+  const topY = layerTopY(li);
+  const floorY = topY + CFG.LAYER_H;
+  for (const col of S.mech.violenceState) {
+    if (col.layerIdx !== li) continue;
+    // Compute where in the period we are.
+    const period = hz.period;
+    const tele = hz.telegraph || 0.55;
+    const phase = ((S.playTime - col.nextFireAt) % period + period) % period;
+    const sinceDrop = phase;
+    const untilDrop = period - phase;
+    const isTelegraphing = untilDrop < tele;
+    const sx = col.x - S.camX;
+    if (sx < -40 || sx > CFG.W + 40) continue;
+    if (isTelegraphing) {
+      const k = 1 - untilDrop / tele;
+      ctx.save();
+      ctx.globalAlpha = 0.3 + k * 0.45;
+      const grd = ctx.createLinearGradient(0, topY - 180 - S.camY, 0, floorY - S.camY);
+      grd.addColorStop(0, 'rgba(255, 40, 60, 0.0)');
+      grd.addColorStop(0.5, 'rgba(255, 40, 60, 0.6)');
+      grd.addColorStop(1, 'rgba(255, 40, 60, 0.0)');
+      ctx.fillStyle = grd;
+      const w = 20 + k * 10;
+      ctx.fillRect(sx - w * 0.5, topY - 180 - S.camY, w, CFG.LAYER_H + 220);
+      ctx.restore();
+    }
+  }
+  // Falling spikes
+  for (const sp of S.mech.fallingSpikes) {
+    if (sp.layerIdx !== li) continue;
+    const x = sp.x - S.camX;
+    const y = sp.y - S.camY;
+    if (x < -40 || x > CFG.W + 40) continue;
+    ctx.save();
+    // Streak
+    ctx.strokeStyle = 'rgba(255, 80, 100, 0.4)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(x, y - 40);
+    ctx.lineTo(x, y + 20);
+    ctx.stroke();
+    // Spike
+    ctx.fillStyle = CFG.C_SPIKE_HI;
+    ctx.strokeStyle = CFG.C_BLACK;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x, y + 30);
+    ctx.lineTo(x - 10, y - 14);
+    ctx.lineTo(x + 10, y - 14);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = CFG.C_SPIKE;
+    ctx.beginPath();
+    ctx.moveTo(x, y + 30);
+    ctx.lineTo(x - 10, y - 14);
+    ctx.lineTo(x, y - 14);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+function drawGreed(li, hz) {
+  const topY = layerTopY(li);
+  for (let i = 0; i < hz.coins.length; i++) {
+    const key = '5:' + i;
+    if (S.mech.coinsTaken.has(key)) continue;
+    const cx = hz.coins[i].x - S.camX;
+    const cy = topY + hz.coins[i].y - S.camY;
+    if (cx < -40 || cx > CFG.W + 40) continue;
+    const pulse = 0.85 + 0.15 * Math.sin(S.playTime * 6 + i * 0.7);
+    const r = 11 * pulse;
+    ctx.save();
+    ctx.shadowColor = '#F4D03F';
+    ctx.shadowBlur = 14;
+    ctx.fillStyle = '#F4D03F';
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#FFF2A8';
+    ctx.beginPath();
+    ctx.arc(cx - r * 0.35, cy - r * 0.35, r * 0.35, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#8A6610';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+    // "$" engraved
+    ctx.fillStyle = '#8A6610';
+    ctx.font = 'bold 12px Impact, system-ui';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('$', cx, cy + 1);
+    ctx.restore();
+  }
+}
+
+function drawGluttony(li, hz) {
+  const rails = railsOfLayer(li);
+  for (const s of (hz.slush || [])) {
+    const r = rails[s.railIdx];
+    if (!r) continue;
+    const x0 = r.x1 + (r.x2 - r.x1) * s.t0;
+    const x1 = r.x1 + (r.x2 - r.x1) * s.t1;
+    const y0 = railYAt(r, x0);
+    const y1 = railYAt(r, x1);
+    const sx0 = x0 - S.camX, sy0 = y0 - S.camY;
+    const sx1 = x1 - S.camX, sy1 = y1 - S.camY;
+    if (sx1 < -40 || sx0 > CFG.W + 40) continue;
+    ctx.save();
+    // Slush glob — uneven ovals above the rail
+    const grd = ctx.createLinearGradient(0, sy0 - 12, 0, sy0 + 4);
+    grd.addColorStop(0, 'rgba(80, 55, 20, 0.0)');
+    grd.addColorStop(1, 'rgba(55, 38, 12, 0.92)');
+    ctx.fillStyle = grd;
+    const samples = Math.max(8, Math.floor((sx1 - sx0) / 16));
+    ctx.beginPath();
+    ctx.moveTo(sx0, sy0);
+    for (let i = 0; i <= samples; i++) {
+      const t = i / samples;
+      const x = sx0 + (sx1 - sx0) * t;
+      const yb = sy0 + (sy1 - sy0) * t;
+      const bulge = 6 + Math.sin(t * 9 + S.playTime * 1.2) * 3;
+      ctx.lineTo(x, yb - bulge);
+    }
+    ctx.lineTo(sx1, sy1);
+    ctx.closePath();
+    ctx.fill();
+    // Chunks
+    ctx.fillStyle = 'rgba(110, 75, 30, 0.75)';
+    for (let i = 0; i < 5; i++) {
+      const t = (i + 0.5) / 5;
+      const x = sx0 + (sx1 - sx0) * t;
+      const yb = sy0 + (sy1 - sy0) * t;
+      ctx.beginPath();
+      ctx.arc(x, yb - 4, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+
+function drawLimbo(li, hz) {
+  if (!hz.bell) return;
+  const topY = layerTopY(li);
+  const bx = hz.bell.x - S.camX;
+  const by = topY + hz.bell.y - S.camY;
+  if (bx < -80 || bx > CFG.W + 80) return;
+  const struck = S.mech.limboState.judged;
+  // Support beam
+  ctx.fillStyle = '#4C3A2A';
+  ctx.strokeStyle = CFG.C_BLACK;
+  ctx.lineWidth = 2;
+  ctx.fillRect(bx - 40, by - 60, 80, 6);
+  ctx.strokeRect(bx - 40, by - 60, 80, 6);
+  // Chain
+  ctx.strokeStyle = '#777060';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(bx, by - 54);
+  ctx.lineTo(bx, by - 14);
+  ctx.stroke();
+  // Bell body
+  const swing = struck ? Math.sin(S.playTime * 14) * 0.3 : Math.sin(S.playTime * 1.4) * 0.04;
+  ctx.save();
+  ctx.translate(bx, by - 14);
+  ctx.rotate(swing);
+  ctx.fillStyle = '#E2B65C';
+  ctx.strokeStyle = CFG.C_BLACK;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(-20, 0);
+  ctx.bezierCurveTo(-22, 22, -14, 36, 0, 36);
+  ctx.bezierCurveTo(14, 36, 22, 22, 20, 0);
+  ctx.lineTo(22, -4);
+  ctx.lineTo(-22, -4);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  // Rim
+  ctx.fillStyle = '#A8832A';
+  ctx.fillRect(-22, -4, 44, 4);
+  // Highlight
+  ctx.fillStyle = '#FFF0B0';
+  ctx.beginPath();
+  ctx.arc(-8, 8, 4, 0, Math.PI * 2);
+  ctx.fill();
+  // Clapper
+  ctx.fillStyle = '#555045';
+  ctx.beginPath();
+  ctx.arc(0, 28, 4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  // Glow halo
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const pulse = struck ? (1 - Math.min(1, S.stateTime * 0.4)) : 0.35 + 0.2 * Math.sin(S.playTime * 2);
+  const glow = ctx.createRadialGradient(bx, by + 6, 6, bx, by + 6, 90);
+  glow.addColorStop(0, `rgba(255, 235, 150, ${0.45 * pulse})`);
+  glow.addColorStop(1, 'rgba(255, 235, 150, 0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(bx - 100, by - 60, 200, 160);
+  ctx.restore();
+  // "STRIKE AT APEX" hint
+  if (!struck) {
+    ctx.save();
+    ctx.font = '900 12px Impact, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#FFE38A';
+    ctx.shadowColor = '#C9A555';
+    ctx.shadowBlur = 6;
+    ctx.fillText('STRIKE AT APEX', bx, by - 74);
+    ctx.shadowBlur = 0;
+    ctx.restore();
+  }
+}
+
+// ============================================================
+// CART
+// ============================================================
+function drawCart(renderX, renderY, rot, airborne) {
+  ctx.save();
+  ctx.translate(renderX, renderY);
+  ctx.rotate(rot);
+  const [sclX, sclY] = getCartSquashScale();
+  if (sclX !== 1 || sclY !== 1) ctx.scale(sclX, sclY);
+
+  const bw = CFG.CART_W, bh = CFG.CART_H;
+
+  drawWheel(-bw * 0.36, 0);
+  drawWheel( bw * 0.36, 0);
+
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = CFG.OUTLINE;
+  ctx.strokeStyle = CFG.C_BLACK;
+
+  ctx.fillStyle = CFG.C_CART_D;
+  ctx.fillRect(-bw * 0.5 + 4, -4, bw - 8, 4);
+
+  ctx.fillStyle = CFG.C_CART;
+  ctx.beginPath();
+  ctx.moveTo(-bw * 0.5 + 3, -3);
+  ctx.lineTo(-bw * 0.5 - 6, -bh);
+  ctx.lineTo( bw * 0.5 + 6, -bh);
+  ctx.lineTo( bw * 0.5 - 3, -3);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = 'rgba(0,0,0,0.32)';
+  ctx.beginPath();
+  ctx.moveTo(-bw * 0.5 + 3, -3);
+  ctx.lineTo(-bw * 0.5 - 6, -bh);
+  ctx.lineTo(-bw * 0.5 + 4, -bh);
+  ctx.lineTo(-bw * 0.5 + 10, -3);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = CFG.C_CART_HI;
+  ctx.fillRect(-bw * 0.5 + 4, -bh + 8, bw - 8, 3);
+
+  ctx.fillStyle = CFG.C_BRASS;
+  ctx.strokeStyle = CFG.C_BLACK;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(-bw * 0.5 - 6, -bh);
+  ctx.lineTo( bw * 0.5 + 6, -bh);
+  ctx.lineTo( bw * 0.5 + 3, -bh + 5);
+  ctx.lineTo(-bw * 0.5 - 3, -bh + 5);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = CFG.C_BRASS_D;
+  for (let i = -1; i <= 1; i++) {
+    ctx.beginPath();
+    ctx.arc(i * 18, -bh + 2.5, 1.8, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const lx = bw * 0.5 + 6;
+  const ly = -bh + 14;
+  ctx.strokeStyle = CFG.C_BLACK;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(bw * 0.5 + 2, -bh + 2);
+  ctx.lineTo(lx, ly - 2);
+  ctx.stroke();
+  ctx.save();
+  ctx.translate(lx, ly);
+  ctx.shadowColor = CFG.C_LAMP;
+  ctx.shadowBlur = 18;
+  ctx.fillStyle = CFG.C_LAMP;
+  ctx.beginPath();
+  ctx.arc(0, 0, 4.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowBlur = 8;
+  ctx.fillStyle = '#FFFFFF';
+  ctx.beginPath();
+  ctx.arc(-1, -1, 2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = CFG.C_BLACK;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(0, 0, 5.5, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+
+  drawRider(-2, -bh - 2);
+
+  ctx.restore();
+
+  // Speed lines when going fast
+  if (!airborne && S.cartVX > CFG.BASE_SPEED + 40) {
+    const intensity = Math.min(1, (S.cartVX - CFG.BASE_SPEED) / 220);
+    ctx.save();
+    ctx.strokeStyle = `rgba(255,200,120,${0.4 * intensity})`;
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 5; i++) {
+      const phase = (S.playTime * 1200 + i * 45) % 70;
+      const lx2 = renderX - 30 - i * 18 - phase * 0.4;
+      const ly2 = renderY - 12 - i * 5;
+      ctx.beginPath();
+      ctx.moveTo(lx2, ly2);
+      ctx.lineTo(lx2 - 24, ly2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
+function drawWheel(dx, dy) {
+  ctx.save();
+  ctx.translate(dx, dy - 9);
+  ctx.rotate((S.cartX / 11) % (Math.PI * 2));
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = CFG.C_BLACK;
+  ctx.lineWidth = CFG.OUTLINE;
+
+  ctx.fillStyle = '#1A1218';
+  ctx.beginPath();
+  ctx.arc(0, 0, 11, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = CFG.C_BRASS;
+  ctx.beginPath();
+  ctx.arc(0, 0, 6.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.strokeStyle = CFG.C_BLACK;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(-6, 0); ctx.lineTo(6, 0);
+  ctx.moveTo(0, -6); ctx.lineTo(0, 6);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+function drawRider(dx, dy) {
+  ctx.save();
+  ctx.translate(dx, dy);
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = CFG.C_BLACK;
+  ctx.lineWidth = CFG.OUTLINE;
+
+  ctx.fillStyle = CFG.C_RIDER;
+  ctx.beginPath();
+  ctx.arc(0, -4, 7, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = CFG.C_CART_D;
+  ctx.beginPath();
+  ctx.moveTo(-9, -6);
+  ctx.lineTo(9, -6);
+  ctx.lineTo(7, -11);
+  ctx.lineTo(-7, -11);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.save();
+  ctx.shadowColor = CFG.C_LAMP;
+  ctx.shadowBlur = 10;
+  ctx.fillStyle = CFG.C_LAMP;
+  ctx.beginPath();
+  ctx.arc(0, -11, 2.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  ctx.restore();
+}
+
+// ============================================================
+// EASING & IMPACT ANIMATION
+// ============================================================
+function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+function easeOutQuart(t) { return 1 - Math.pow(1 - t, 4); }
+function easeOutBack(t) {
+  const c1 = 1.70158, c3 = c1 + 1;
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+}
+
+function triggerCartSquashLand(impactVY) {
+  // impactVY is positive (moving down); clamp the visible squash
+  const strength = Math.min(1, Math.max(0.25, impactVY / 720));
+  S.cartSquashStart = S.playTime;
+  S.cartSquashType = 'land';
+  S.cartSquashStrength = strength;
+}
+
+function triggerCartSquashJump() {
+  S.cartSquashStart = S.playTime;
+  S.cartSquashType = 'jump';
+  S.cartSquashStrength = 1;
+}
+
+function getCartSquashScale() {
+  if (!S.cartSquashType) return [1, 1];
+  const dur = S.cartSquashType === 'land' ? CFG.CART_SQUASH_LAND_DUR : CFG.CART_SQUASH_JUMP_DUR;
+  const t = (S.playTime - S.cartSquashStart) / dur;
+  if (t >= 1 || t < 0) { S.cartSquashType = ''; return [1, 1]; }
+  const s = S.cartSquashStrength;
+  if (S.cartSquashType === 'land') {
+    // ease-in first (snap compression), then ease-out-back to normal (overshoot and settle)
+    // Split animation into two phases:
+    // 0..0.15: compress in (ease-in-quad) — fast thud
+    // 0.15..1: decompress with back overshoot
+    if (t < 0.15) {
+      const k = t / 0.15;
+      const e = k * k; // ease-in-quad
+      return [1 + 0.28 * s * e, 1 - 0.35 * s * e];
+    } else {
+      const k = (t - 0.15) / 0.85;
+      const e = easeOutBack(k);
+      return [1 + 0.28 * s * (1 - e), 1 - 0.35 * s * (1 - e)];
+    }
+  } else if (S.cartSquashType === 'jump') {
+    // Start stretched, ease back to normal (ease-out)
+    const e = easeOutCubic(t);
+    return [1 - 0.14 * s * (1 - e), 1 + 0.22 * s * (1 - e)];
+  }
+  return [1, 1];
+}
+
+function triggerRailImpact(rail, worldX, strength) {
+  rail.impactAt = S.playTime;
+  rail.impactStrength = strength;
+  rail.impactT = Math.max(0, Math.min(1, (worldX - rail.x1) * rail.invLen));
+}
+
+function railImpactBob(rail, t01) {
+  // Returns a y-offset in world pixels at parametric position t01 (0..1) along the rail.
+  if (rail.impactAt === undefined) return 0;
+  const age = S.playTime - rail.impactAt;
+  if (age < 0 || age > CFG.RAIL_BOB_DUR) return 0;
+  // Damped cosine: starts at +max (rail pushed DOWN on impact), rings out with ease-out envelope
+  const ageN = age / CFG.RAIL_BOB_DUR;
+  const envelope = Math.pow(1 - ageN, 2.2);
+  const osc = Math.cos(age * 26);
+  // Gaussian falloff around impact point along the rail
+  const d = t01 - (rail.impactT ?? 0.5);
+  const falloff = Math.exp(-d * d * 12);
+  return rail.impactStrength * envelope * falloff * osc;
+}
+
+// ============================================================
+// ANGEL GHOST
+// ============================================================
+function spawnGhost(x, y) {
+  S.ghost = { x, y, age: 0, baseX: x };
+}
+
+function updateGhost(dt) {
+  if (!S.ghost) return;
+  S.ghost.age += dt;
+  S.ghost.y -= CFG.GHOST_RISE * dt;
+}
+
+function drawGhost() {
+  if (!S.ghost) return;
+  const g = S.ghost;
+  const alpha = Math.max(0, 1 - g.age / CFG.GHOST_LIFE);
+  if (alpha <= 0) return;
+  const wobble = Math.sin(g.age * CFG.GHOST_WOBBLE_F) * CFG.GHOST_WOBBLE_A;
+  const sx = (g.baseX + wobble) - S.camX;
+  const sy = g.y - S.camY;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  // Soft glow
+  const glow = ctx.createRadialGradient(sx, sy - 4, 4, sx, sy - 4, 34);
+  glow.addColorStop(0, 'rgba(255,250,220,0.55)');
+  glow.addColorStop(1, 'rgba(255,250,220,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(sx - 40, sy - 44, 80, 80);
+
+  // Halo
+  ctx.strokeStyle = CFG.C_HALO;
+  ctx.lineWidth = 2.5;
+  ctx.shadowColor = CFG.C_HALO;
+  ctx.shadowBlur = 12;
+  ctx.beginPath();
+  ctx.ellipse(sx, sy - 22, 11, 3.5, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  // Body — rounded head with wavy sheet
+  ctx.fillStyle = CFG.C_ANGEL;
+  ctx.strokeStyle = 'rgba(80,80,120,0.55)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(sx, sy - 12, 9, Math.PI, Math.PI * 2);
+  // Wavy bottom
+  const waves = 4;
+  for (let i = 0; i <= waves; i++) {
+    const t = i / waves;
+    const wx = sx + 9 - 18 * t;
+    const wy = sy - 3 + (i % 2 === 0 ? 3 : -1) + Math.sin(g.age * 3 + i) * 1.2;
+    ctx.lineTo(wx, wy);
+  }
+  ctx.lineTo(sx - 9, sy - 12);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // Tiny wings
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.beginPath();
+  ctx.ellipse(sx - 10, sy - 12, 5, 7, -0.4, 0, Math.PI * 2);
+  ctx.ellipse(sx + 10, sy - 12, 5, 7, 0.4, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Face
+  ctx.fillStyle = 'rgba(40,40,80,0.85)';
+  ctx.beginPath();
+  ctx.arc(sx - 2.6, sy - 12, 1.2, 0, Math.PI * 2);
+  ctx.arc(sx + 2.6, sy - 12, 1.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(40,40,80,0.7)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(sx, sy - 9, 1.8, 0, Math.PI);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+// ============================================================
+// PARTICLES
+// ============================================================
 function stepParticles(dt, grav) {
   for (const p of S.particles) {
     p.x += p.vx * dt;
     p.y += p.vy * dt;
     p.vy += grav * dt;
+    p.vx *= Math.pow(0.3, dt);
     p.rot += p.rotV * dt;
     p.life -= dt;
   }
   S.particles = S.particles.filter(p => p.life > 0);
 }
 
-function die() {
-  if (S.state !== 'playing') return;
-  S.state = 'dying';
-  S.stateTime = 0;
-  S.freezeFrame = CFG.FREEZE_FRAME;
-  S.shake = 18;
-  S.inputLock = CFG.DEATH_LOCKOUT;
-  sndDeath();
+function drawParticles() {
+  for (const p of S.particles) {
+    const a = Math.min(1, p.life / (p.maxLife || 0.5));
+    ctx.save();
+    ctx.translate(p.x - S.camX, p.y - S.camY);
+    ctx.rotate(p.rot);
+    ctx.globalAlpha = a;
+    ctx.fillStyle = p.color;
+    const s = p.size;
+    ctx.fillRect(-s * 0.5, -s * 0.5, s, s);
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+}
 
-  for (let i = 0; i < 32; i++) {
-    const ang = Math.random() * Math.PI * 2;
-    const sp = 140 + Math.random() * 260;
-    const colors = [CFG.C_PINK, CFG.C_YELLOW, CFG.C_CYAN, CFG.C_BONE];
+function spawnJumpParticles() {
+  for (let i = 0; i < 6; i++) {
     S.particles.push({
-      x: CFG.CART_SCREEN_X + (Math.random() - 0.5) * 20,
+      x: S.cartX - 20 + (Math.random() - 0.5) * 10,
+      y: S.cartY - 2,
+      vx: -80 - Math.random() * 80,
+      vy: -20 + Math.random() * 40,
+      life: 0.32, maxLife: 0.4,
+      size: 3 + Math.random() * 3,
+      color: Math.random() < 0.5 ? '#8A7560' : '#3C2818',
+      rot: Math.random() * Math.PI,
+      rotV: (Math.random() - 0.5) * 8,
+    });
+  }
+}
+
+function spawnLandingParticles() {
+  for (let i = 0; i < 10; i++) {
+    const sp = 60 + Math.random() * 140;
+    const ang = -Math.PI * (0.15 + Math.random() * 0.7);
+    S.particles.push({
+      x: S.cartX + (Math.random() - 0.5) * 16,
+      y: S.cartY,
+      vx: Math.cos(ang) * sp * 0.3 - 10,
+      vy: Math.sin(ang) * sp * 0.7,
+      life: 0.4 + Math.random() * 0.25, maxLife: 0.65,
+      size: 3 + Math.random() * 3,
+      color: Math.random() < 0.5 ? '#8A7560' : '#4A3A2C',
+      rot: Math.random() * Math.PI,
+      rotV: (Math.random() - 0.5) * 10,
+    });
+  }
+  S.shake = 4;
+}
+
+function spawnPortalParticles(x, y) {
+  for (let i = 0; i < 22; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const sp = 120 + Math.random() * 200;
+    S.particles.push({
+      x, y,
+      vx: Math.cos(ang) * sp,
+      vy: Math.sin(ang) * sp - 40,
+      life: 0.5 + Math.random() * 0.4, maxLife: 0.9,
+      size: 3 + Math.random() * 3,
+      color: Math.random() < 0.5 ? CFG.C_PORTAL : CFG.C_PORTAL_HI,
+      rot: Math.random() * Math.PI,
+      rotV: (Math.random() - 0.5) * 12,
+    });
+  }
+}
+
+function spawnDeathParticles() {
+  for (let i = 0; i < 30; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const sp = 120 + Math.random() * 260;
+    const colors = [CFG.C_NEON_A, CFG.C_SPIKE_HI, CFG.C_CART_HI, '#8A7560', CFG.C_BRASS];
+    S.particles.push({
+      x: S.cartX,
       y: S.cartY - 22,
       vx: Math.cos(ang) * sp,
       vy: Math.sin(ang) * sp - 140,
-      life: 0.7 + Math.random() * 0.5,
-      maxLife: 1.1,
-      size: 5 + Math.random() * 5,
+      life: 0.7 + Math.random() * 0.5, maxLife: 1.1,
+      size: 3 + Math.random() * 4,
       color: colors[(Math.random() * colors.length) | 0],
       rot: Math.random() * Math.PI,
-      rotV: (Math.random() - 0.5) * 14,
+      rotV: (Math.random() - 0.5) * 12,
     });
   }
+}
 
-  const dm = Math.floor(S.distanceM);
-  if (dm > S.best) {
-    S.best = dm;
-    try { localStorage.setItem('railgrind.best', String(dm)); } catch (e) {}
+function spawnWinParticles() {
+  for (let i = 0; i < 40; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const sp = 80 + Math.random() * 200;
+    S.particles.push({
+      x: S.cartX + (Math.random() - 0.5) * 100,
+      y: S.cartY - 30,
+      vx: Math.cos(ang) * sp,
+      vy: Math.sin(ang) * sp - 180,
+      life: 0.8 + Math.random() * 0.7, maxLife: 1.5,
+      size: 3 + Math.random() * 4,
+      color: [CFG.C_LAMP, CFG.C_NEON_C, CFG.C_NEON_A, '#FFFFFF'][(Math.random() * 4) | 0],
+      rot: Math.random() * Math.PI,
+      rotV: (Math.random() - 0.5) * 12,
+    });
   }
 }
 
 // ============================================================
-// === STATE TRANSITIONS ======================================
+// COLLISION
+// ============================================================
+function findRailLanding(prevX, prevY, curX, curY) {
+  // Only consider landing if falling
+  if (curY < prevY) return null;
+  let best = null;
+  let bestY = Infinity;
+  const destroyed = S.mech ? S.mech.collapsed : null;
+  for (const r of WORLD.rails) {
+    if (destroyed && destroyed.has(r)) continue;
+    if (curX < r.x1 || curX > r.x2) continue;
+    const ry = railYAt(r, curX);
+    const tPrev = Math.max(0, Math.min(1, (prevX - r.x1) * r.invLen));
+    const rPrevY = r.y1 + (r.y2 - r.y1) * tPrev;
+    // Crossed from above
+    if (prevY <= rPrevY + 3 && curY >= ry - 1) {
+      // Must be falling onto topside
+      if (ry < bestY && ry >= prevY - 40) {
+        bestY = ry;
+        best = r;
+      }
+    }
+  }
+  return best ? { rail: best, y: bestY } : null;
+}
+
+// ============================================================
+// HAZARDS — per-circle mechanics
+// ============================================================
+function hazardOfLayer(idx) {
+  const L = LAYERS[idx];
+  return L ? L.hazard : null;
+}
+
+function railsOfLayer(idx) {
+  const out = [];
+  for (const r of WORLD.rails) if (r.layerIdx === idx) out.push(r);
+  return out;
+}
+
+// Resolve a local (per-layer) rail index to the WORLD.rails entry.
+function worldRailByLocalIdx(layerIdx, localIdx) {
+  const rails = railsOfLayer(layerIdx);
+  return rails[localIdx] || null;
+}
+
+function showBanner(text, sub) {
+  S.bannerText = text;
+  S.bannerSub = sub || '';
+  S.bannerAt = S.playTime;
+}
+
+function resetHazards() {
+  S.mech = makeMechState();
+  // Seed per-column fire-at times for violence
+  for (let li = 0; li < LAYERS.length; li++) {
+    const L = LAYERS[li];
+    const hz = L.hazard;
+    if (!hz) continue;
+    if (hz.type === 'violence') {
+      for (const col of hz.columns) {
+        S.mech.violenceState.push({
+          x: col.x,
+          layerIdx: li,
+          nextFireAt: (col.phase || 0) % hz.period,
+          telegraphUntil: -1,
+        });
+      }
+    }
+    if (hz.type === 'wrath') {
+      S.mech.tide.y = layerTopY(li) + CFG.LAYER_H + 20;
+    }
+  }
+  S.prevLayer = -1;
+  S.bannerAt = -99;
+}
+
+// Restore one circle's per-run hazard state — called when the player advances
+// to a higher circle, so the floor they came from is fresh if they fall back.
+function resetLayer(layerIdx) {
+  if (!S.mech || layerIdx < 0 || layerIdx >= LAYERS.length) return;
+  // Bring back collapsed rails and clear in-flight crumble timers / fires.
+  for (const r of WORLD.rails) {
+    if (r.layerIdx !== layerIdx) continue;
+    S.mech.collapsed.delete(r);
+    S.mech.crumbling.delete(r);
+    S.mech.fire.delete(r);
+  }
+  // GREED — coins respawn and the portal unlocks.
+  const prefix = layerIdx + ':';
+  for (const k of Array.from(S.mech.coinsTaken)) {
+    if (k.startsWith(prefix)) S.mech.coinsTaken.delete(k);
+  }
+  S.mech.portalLocked.delete(layerIdx);
+  // VIOLENCE — drop any spikes that were mid-flight in this layer.
+  if (S.mech.fallingSpikes.length) {
+    S.mech.fallingSpikes = S.mech.fallingSpikes.filter(s => s.layerIdx !== layerIdx);
+  }
+  // WRATH — let re-entry re-arm the tide from the floor.
+  const hz = hazardOfLayer(layerIdx);
+  if (hz && hz.type === 'wrath') {
+    S.mech.tide.active = false;
+    S.mech.tide.y = layerTopY(layerIdx) + CFG.LAYER_H + 20;
+  }
+  // GLUTTONY — drop any active slow window.
+  if (hz && hz.type === 'gluttony') {
+    S.mech.slowUntil.t = 0;
+  }
+}
+
+// Parametric position along a rail (0..1) for a given world X.
+function railT(rail, x) {
+  return Math.max(0, Math.min(1, (x - rail.x1) * rail.invLen));
+}
+
+// Collapse a rail (treachery / fraud crumble) with a puff of debris.
+function collapseRail(rail) {
+  if (S.mech.collapsed.has(rail)) return;
+  S.mech.collapsed.add(rail);
+  // If cart is on this rail, eject to airborne
+  if (S.currentRail === rail) {
+    S.currentRail = null;
+    S.airborne = true;
+    S.cartVY = Math.max(S.cartVY, 40);
+    S.coyote = 0;
+  }
+  // Debris particles
+  for (let i = 0; i < 14; i++) {
+    const t = Math.random();
+    const px = rail.x1 + (rail.x2 - rail.x1) * t;
+    const py = rail.y1 + (rail.y2 - rail.y1) * t;
+    S.particles.push({
+      x: px, y: py,
+      vx: (Math.random() - 0.5) * 220,
+      vy: 30 + Math.random() * 140,
+      life: 0.55 + Math.random() * 0.3, maxLife: 0.9,
+      size: 3 + Math.random() * 3,
+      color: Math.random() < 0.5 ? CFG.C_WOOD : CFG.C_WOOD_D,
+      rot: Math.random() * Math.PI,
+      rotV: (Math.random() - 0.5) * 10,
+    });
+  }
+  S.shake = Math.max(S.shake, 3);
+}
+
+// Called right after the cart lands on a rail. Dispatches per-mechanic landing hook.
+function onLand(rail, worldX) {
+  if (!S.mech) return;
+  const lIdx = rail.layerIdx;
+  const hz = hazardOfLayer(lIdx);
+  if (!hz) return;
+
+  if (hz.type === 'treachery') {
+    const localIdx = railsOfLayer(lIdx).indexOf(rail);
+    if (hz.traitors && hz.traitors.includes(localIdx)) {
+      // Tiny forgiveness window so the jump animation has a beat
+      setTimeout(() => collapseRail(rail), 40);
+      beep(110, 0.16, 'sawtooth', 0.06, 60);
+    }
+  } else if (hz.type === 'fraud') {
+    if (!S.mech.crumbling.has(rail)) {
+      S.mech.crumbling.set(rail, { startT: S.playTime });
+    }
+  } else if (hz.type === 'heresy') {
+    // Ignite a new fire at landing point on this rail.
+    let arr = S.mech.fire.get(rail);
+    if (!arr) { arr = []; S.mech.fire.set(rail, arr); }
+    arr.push({ x: worldX, t: S.playTime });
+    beep(420, 0.14, 'square', 0.05, 170);
+  } else if (hz.type === 'gluttony') {
+    // Landing in slush → slow window.
+    const localIdx = railsOfLayer(lIdx).indexOf(rail);
+    const t = railT(rail, worldX);
+    for (const s of (hz.slush || [])) {
+      if (s.railIdx === localIdx && t >= s.t0 && t <= s.t1) {
+        S.mech.slowUntil.t = S.playTime + (hz.slowDur || 1.3);
+        beep(90, 0.22, 'square', 0.06, 55);
+        // splat particles
+        for (let i = 0; i < 12; i++) {
+          S.particles.push({
+            x: worldX + (Math.random() - 0.5) * 20,
+            y: railYAt(rail, worldX),
+            vx: (Math.random() - 0.5) * 160,
+            vy: -40 - Math.random() * 80,
+            life: 0.4 + Math.random() * 0.2, maxLife: 0.6,
+            size: 3 + Math.random() * 3,
+            color: Math.random() < 0.5 ? '#3A2A12' : '#55421A',
+            rot: Math.random() * Math.PI,
+            rotV: (Math.random() - 0.5) * 8,
+          });
+        }
+        break;
+      }
+    }
+  }
+}
+
+// Main hazard tick. Called at the start of physicsStep.
+function updateHazards(dt) {
+  if (!S.mech) return;
+
+  // Entry banner + per-circle setup when crossing layers
+  if (S.currentLayer !== S.prevLayer) {
+    if (S.currentLayer > S.deepestLayer) S.deepestLayer = S.currentLayer;
+    // Ascending to a higher circle restores the one we just left, so a player
+    // who falls back gets a fresh attempt at it instead of the wreckage.
+    if (S.prevLayer >= 0 && S.currentLayer > S.prevLayer) {
+      resetLayer(S.prevLayer);
+    }
+    const hz = hazardOfLayer(S.currentLayer);
+    if (hz) {
+      const label = (LAYERS[S.currentLayer].name || '') + ' — ' + (HAZARD_BLURBS[hz.type] || '');
+      showBanner('CIRCLE ' + (S.currentLayer + 1), label);
+      if (hz.type === 'wrath') {
+        // Start tide rising from below the current layer floor on first entry.
+        S.mech.tide.y = layerTopY(S.currentLayer) + CFG.LAYER_H + 20;
+        S.mech.tide.active = true;
+        S.mech.tide.armedAt = S.playTime + (hz.startDelay || 0);
+      } else {
+        S.mech.tide.active = false;
+      }
+    }
+    S.prevLayer = S.currentLayer;
+  }
+
+  // FRAUD: advance crumble timers; collapse overdue rails.
+  for (const [rail, info] of S.mech.crumbling) {
+    const hz = hazardOfLayer(rail.layerIdx);
+    const delay = (hz && hz.crumbleDelay) ? hz.crumbleDelay : 0.42;
+    if (S.playTime - info.startT >= delay && !S.mech.collapsed.has(rail)) {
+      collapseRail(rail);
+    }
+  }
+
+  // WRATH: tide rise + death check (only while player is in layer 4 or below).
+  const wrathLayer = 4;
+  if (S.mech.tide.active) {
+    const wHz = hazardOfLayer(wrathLayer);
+    if (wHz && S.playTime >= S.mech.tide.armedAt) {
+      S.mech.tide.y -= (wHz.riseRate || 60) * dt; // rising = y decreases (smaller world-Y = higher)
+    }
+    // Clamp to layer box
+    const topY = layerTopY(wrathLayer);
+    const botY = topY + CFG.LAYER_H;
+    if (S.mech.tide.y < topY - 40) S.mech.tide.y = topY - 40;
+    if (S.mech.tide.y > botY + 20) S.mech.tide.y = botY + 20;
+    // Death if cart is in or below the tide.
+    if (S.currentLayer === wrathLayer && S.cartY >= S.mech.tide.y - 6) {
+      die('wrath');
+      return;
+    }
+  }
+
+  // VIOLENCE: advance spike-column timers only while in layer 2.
+  const vHz = hazardOfLayer(2);
+  if (vHz) {
+    for (const col of S.mech.violenceState) {
+      // Advance its clock (playTime-based — columns tick whether you're in the layer or not,
+      // so the rhythm stays predictable)
+      const phase = (S.playTime - col.nextFireAt) % vHz.period;
+      // Drop a spike at the start of each period.
+      const since = S.playTime - col.nextFireAt;
+      if (since >= 0) {
+        // Telegraph window just before drop
+        const teleStart = vHz.period - (vHz.telegraph || 0.55);
+        const loopT = ((since % vHz.period) + vHz.period) % vHz.period;
+        col.telegraphUntil = S.playTime + ((teleStart - loopT + vHz.period) % vHz.period);
+        // Fire when loopT rolls over near zero
+        if (loopT < dt * 1.05 && S.currentLayer === 2) {
+          S.mech.fallingSpikes.push({
+            x: col.x,
+            y: layerTopY(2) - 180,
+            vy: 640,
+            layerIdx: 2,
+            age: 0,
+            life: 1.5,
+          });
+        }
+      }
+    }
+  }
+  // Step falling spikes and check collisions.
+  const cartR = 22;
+  for (const sp of S.mech.fallingSpikes) {
+    sp.y += sp.vy * dt;
+    sp.age += dt;
+    // Hit test against cart only while in layer 2
+    if (S.currentLayer === 2) {
+      const dx = Math.abs(S.cartX - sp.x);
+      const dy = S.cartY - sp.y;
+      if (dx < 18 && dy > -8 && dy < 50) {
+        die('violence');
+        return;
+      }
+    }
+    // Explode when spike passes layer floor
+    const floorY = layerTopY(sp.layerIdx) + CFG.LAYER_H + 20;
+    if (sp.y > floorY) sp.life = 0;
+  }
+  S.mech.fallingSpikes = S.mech.fallingSpikes.filter(s => s.life > 0);
+
+  // HERESY: spread fire along rails; kill if cart touches ignited span.
+  const hHz = hazardOfLayer(3);
+  if (hHz) {
+    const spread = hHz.spreadRate || 140;
+    for (const [rail, arr] of S.mech.fire) {
+      for (const f of arr) f.ageRadius = (f.ageRadius || 0) + spread * dt;
+    }
+    // Death check only while in heresy layer
+    if (S.currentLayer === 3 && S.currentRail) {
+      const arr = S.mech.fire.get(S.currentRail);
+      if (arr) {
+        for (const f of arr) {
+          const r = f.ageRadius || 0;
+          if (Math.abs(S.cartX - f.x) < r - 14) {
+            die('heresy');
+            return;
+          }
+        }
+      }
+    }
+  }
+
+  // LUST: sine-wave wind.
+  const lHz = hazardOfLayer(7);
+  if (lHz && S.currentLayer === 7) {
+    const t = S.playTime;
+    S.mech.wind.current = Math.sin(t * (Math.PI * 2) / (lHz.period || 2.8)) * (lHz.amplitude || 140);
+    // Wind influences the cart only while airborne (it's wind, not a ground force)
+    if (S.airborne) {
+      S.cartVX += S.mech.wind.current * dt * 1.8;
+    }
+  } else {
+    S.mech.wind.current *= Math.pow(0.1, dt); // decay when out of layer
+  }
+
+  // GLUTTONY: apply slow factor.
+  if (S.currentLayer === 6 && S.playTime < S.mech.slowUntil.t) {
+    const gHz = hazardOfLayer(6);
+    const k = gHz ? (gHz.slowFactor || 0.45) : 0.45;
+    S.cartVX = Math.min(S.cartVX, CFG.BASE_SPEED * k);
+  }
+
+  // GREED: coin collection + portal lock check.
+  const grHz = hazardOfLayer(5);
+  if (grHz && grHz.coins) {
+    const topY = layerTopY(5);
+    for (let i = 0; i < grHz.coins.length; i++) {
+      const key = '5:' + i;
+      if (S.mech.coinsTaken.has(key)) continue;
+      const cx = grHz.coins[i].x;
+      const cy = topY + grHz.coins[i].y;
+      const dx = S.cartX - cx;
+      const dy = (S.cartY - 18) - cy;
+      if (Math.abs(dx) < 22 && Math.abs(dy) < 22) {
+        S.mech.coinsTaken.add(key);
+        // Count only coins from the current active run of layer 5
+        let n = 0;
+        for (const k of S.mech.coinsTaken) if (k.startsWith('5:')) n++;
+        if (n > grHz.limit) {
+          S.mech.portalLocked.add(5);
+          beep(80, 0.6, 'sawtooth', 0.08, 40);
+          showBanner('PORTAL SEALED', 'TOO MUCH GOLD');
+          S.shake = Math.max(S.shake, 8);
+        } else {
+          beep(900, 0.08, 'sine', 0.05, 1400);
+          // sparkle
+          for (let j = 0; j < 8; j++) {
+            S.particles.push({
+              x: cx, y: cy,
+              vx: (Math.random() - 0.5) * 200,
+              vy: -60 - Math.random() * 160,
+              life: 0.5, maxLife: 0.7,
+              size: 3, color: '#F4D03F',
+              rot: 0, rotV: (Math.random() - 0.5) * 8,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // LIMBO: bell-strike judgement.
+  const liHz = hazardOfLayer(8);
+  if (liHz && liHz.bell && S.currentLayer === 8 && !S.mech.limboState.judged) {
+    const b = liHz.bell;
+    const topY = layerTopY(8);
+    const bx = b.x, by = topY + b.y;
+    const dx = S.cartX - bx;
+    const dy = (S.cartY - 24) - by;
+    if (Math.abs(dx) < 32 && Math.abs(dy) < b.tolerance) {
+      // Must be at jump apex (|vy| small) and at/above min speed.
+      const apex = Math.abs(S.cartVY) < 80;
+      const fast = S.cartVX >= (b.minSpeed || 440);
+      if (S.airborne && apex && fast) {
+        S.mech.limboState.judged = true;
+        S.mech.limboState.armed = false;
+        // Bell-ring
+        beep(1200, 0.22, 'triangle', 0.09, 1800);
+        setTimeout(() => beep(1800, 0.26, 'sine', 0.07, 2400), 60);
+        for (let i = 0; i < 40; i++) {
+          S.particles.push({
+            x: bx, y: by,
+            vx: (Math.random() - 0.5) * 320,
+            vy: -60 + (Math.random() - 0.5) * 280,
+            life: 0.8, maxLife: 1.2,
+            size: 3 + Math.random() * 3,
+            color: i % 2 ? CFG.C_LAMP : '#FFFFFF',
+            rot: 0, rotV: (Math.random() - 0.5) * 12,
+          });
+        }
+        S.shake = 10;
+        // Snap cart to the finish so the win pose reads correctly
+        if (WORLD.finish) {
+          S.cartX = WORLD.finish.x;
+          S.cartY = WORLD.finish.y;
+        }
+        win();
+        return;
+      }
+    }
+  }
+}
+
+// Is the layer's portal gated closed? (greed lock)
+function portalIsLocked(srcLayer) {
+  return !!(S.mech && S.mech.portalLocked.has(srcLayer));
+}
+
+// ============================================================
+// PHYSICS
+// ============================================================
+function physicsStep(dt) {
+  if (S.state !== 'playing') return;
+
+  S.prevCartX = S.cartX;
+  S.prevCartY = S.cartY;
+  S.prevRot = S.cartRot;
+  S.playTime += dt;
+
+  if (jumpPressed) {
+    S.jumpBuffer = CFG.JUMP_BUFFER;
+    jumpPressed = false;
+  }
+  S.jumpBuffer = Math.max(0, S.jumpBuffer - dt);
+  S.coyote = Math.max(0, S.coyote - dt);
+  S.portalCooldown = Math.max(0, S.portalCooldown - dt);
+
+  // Phase 1: check if the current rail is still valid
+  if (!S.airborne && S.currentRail) {
+    if (S.cartX < S.currentRail.x1 || S.cartX > S.currentRail.x2) {
+      S.airborne = true;
+      S.coyote = CFG.COYOTE;
+      // Carry momentum: keep any slope-implied vertical velocity
+      S.cartVY = S.cartVX * S.currentRail.slope;
+      S.currentRail = null;
+    }
+  }
+
+  // Phase 2: jump
+  if (S.jumpBuffer > 0 && (!S.airborne || S.coyote > 0)) {
+    let slope = 0;
+    const jumpRail = S.currentRail;
+    if (jumpRail) slope = jumpRail.slope;
+    S.cartVY = S.cartVX * slope - CFG.JUMP_V;
+    S.airborne = true;
+    S.currentRail = null;
+    S.coyote = 0;
+    S.jumpBuffer = 0;
+    sndJump();
+    spawnJumpParticles();
+    triggerCartSquashJump();
+    if (jumpRail) triggerRailImpact(jumpRail, S.cartX, 5);
+  }
+
+  // Phase 3: motion
+  const targetSpeed = CFG.BASE_SPEED;
+  if (S.airborne) {
+    // Variable jump height: if the button was released while rising fast, cap
+    // upward velocity to JUMP_V_MIN so a short tap gives a short hop and a long
+    // hold keeps the full arc.
+    if (!jumpHeld && S.cartVY < -CFG.JUMP_V_MIN) {
+      S.cartVY = -CFG.JUMP_V_MIN;
+    }
+    // Lower gravity while rising gives a floatier, more forgiving jump arc
+    const g = S.cartVY < 0 ? CFG.JUMP_HOLD_G : CFG.GRAVITY;
+    S.cartVY += g * dt;
+    S.cartX += S.cartVX * dt;
+    S.cartY += S.cartVY * dt;
+    // Clamp to world horizontally
+    if (S.cartX < 10) { S.cartX = 10; S.cartVX = Math.max(CFG.MIN_SPEED, S.cartVX); }
+    if (S.cartX > WORLD.worldW - 10) S.cartX = WORLD.worldW - 10;
+
+    const targetRot = Math.atan2(S.cartVY, Math.max(80, S.cartVX));
+    S.cartRot += (targetRot - S.cartRot) * Math.min(1, dt * 7);
+
+    // Check rail landing
+    const hit = findRailLanding(S.prevCartX, S.prevCartY, S.cartX, S.cartY);
+    if (hit) {
+      const impactVY = Math.max(0, S.cartVY);
+      S.cartY = hit.y;
+      S.cartVY = 0;
+      S.airborne = false;
+      S.currentRail = hit.rail;
+      S.cartRot = Math.atan(hit.rail.slope);
+      S.cartVX = Math.max(CFG.MIN_SPEED, S.cartVX);
+      sndLand();
+      spawnLandingParticles();
+      triggerCartSquashLand(impactVY);
+      triggerRailImpact(hit.rail, S.cartX, Math.min(14, impactVY * 0.024));
+      onLand(hit.rail, S.cartX);
+    }
+  } else if (S.currentRail) {
+    const r = S.currentRail;
+    const slope = r.slope;
+    const dvx = CFG.SLOPE_G * slope - CFG.SPEED_DRAG * (S.cartVX - targetSpeed);
+    S.cartVX = Math.max(CFG.MIN_SPEED, Math.min(CFG.MAX_SPEED, S.cartVX + dvx * dt));
+    S.cartX += S.cartVX * dt;
+    S.cartY = railYAt(r, Math.max(r.x1, Math.min(r.x2, S.cartX)));
+    const targetRot = Math.atan(slope);
+    S.cartRot += (targetRot - S.cartRot) * Math.min(1, dt * 12);
+  }
+
+  // Portal touch — generous zone, biased to the right & tall so overhead jumps still count
+  if (S.portalCooldown <= 0) {
+    for (const p of WORLD.portals) {
+      if (portalIsLocked(p.srcLayer)) continue;
+      const relX = S.cartX - p.x;
+      const relY = (S.cartY - 22) - (p.y - 10);
+      if (relX >= -60 && relX <= 110 && relY >= -450 && relY <= 80) {
+        // Teleport
+        spawnPortalParticles(p.x, p.y - 10);
+        S.cartX = p.tgtX;
+        S.cartY = p.tgtY;
+        S.cartVY = 0;
+        S.cartRot = 0;
+        S.airborne = false;
+        S.currentRail = null;
+        S.portalCooldown = 0.3;
+        S.shake = 8;
+        // Snap camera & interpolation refs to avoid a flash
+        S.prevCartX = S.cartX;
+        S.prevCartY = S.cartY;
+        S.prevRot = 0;
+        S.camX = S.cartX - CFG.CART_SCREEN_X;
+        S.camY = S.cartY - CFG.CART_SCREEN_Y;
+        spawnPortalParticles(p.tgtX, p.tgtY - 10);
+        sndPortal();
+        // Snap currentRail by finding rail under cart
+        for (const r of WORLD.rails) {
+          if (S.cartX >= r.x1 && S.cartX <= r.x2) {
+            const ry = railYAt(r, S.cartX);
+            if (Math.abs(ry - S.cartY) < 6) {
+              S.currentRail = r;
+              S.cartY = ry;
+              break;
+            }
+          }
+        }
+        if (!S.currentRail) S.airborne = true;
+        break;
+      }
+    }
+  }
+
+  // Finish line touch — if the final layer has a bell hazard, the bell must be
+  // struck first (the bell strike calls win() directly from updateHazards)
+  if (WORLD.finish) {
+    const f = WORLD.finish;
+    const liHz = hazardOfLayer(CFG.LAYER_COUNT - 1);
+    const bellRequired = liHz && liHz.type === 'limbo' && liHz.bell;
+    const bellPassed = bellRequired && S.mech && S.mech.limboState.judged;
+    if (!bellRequired || bellPassed) {
+      if (Math.abs(S.cartX - f.x) < CFG.FINISH_W * 0.5 && Math.abs((S.cartY - 22) - f.y) < 80) {
+        win();
+        return;
+      }
+    }
+  }
+
+  // Spike / pit
+  if (S.cartY > WORLD.spikeY - 10) {
+    die();
+    return;
+  }
+
+  // Camera: lock X to cart (fixed screen position, no jitter); smooth Y for falling drama
+  S.camX = S.cartX - CFG.CART_SCREEN_X;
+  const lookY = S.airborne && S.cartVY > 0 ? Math.min(80, S.cartVY * 0.09) : 0;
+  const targetCamY = S.cartY - CFG.CART_SCREEN_Y + lookY;
+  const camSpeed = Math.abs(targetCamY - S.camY) > 300 ? dt * 18 : dt * 12;
+  S.camY += (targetCamY - S.camY) * Math.min(1, camSpeed);
+
+  // Track layer
+  S.currentLayer = currentLayerIdx(S.cartY);
+
+  // Per-circle mechanics tick (may call die() / win() and return state transitions)
+  updateHazards(dt);
+  if (S.state !== 'playing') return;
+
+  stepParticles(dt, CFG.GRAVITY * 0.9);
+
+  if (S.shake > 0) {
+    S.shake *= Math.pow(0.001, dt);
+    if (S.shake < 0.5) S.shake = 0;
+  }
+}
+
+function die(cause) {
+  if (S.state !== 'playing') return;
+  S.state = 'dying';
+  S.stateTime = 0;
+  S.freezeFrame = CFG.DEATH_FREEZE;
+  S.shake = 16;
+  S.inputLock = 0.8;
+  S.deathCause = cause || 'pit';
+  spawnGhost(S.cartX, S.cartY - 30);
+  sndDeath();
+  spawnDeathParticles();
+  S.finalTime = S.playTime;
+  S.lastRunEscaped = false;
+}
+
+function win() {
+  if (S.state !== 'playing') return;
+  S.state = 'won';
+  S.stateTime = 0;
+  S.finalTime = S.playTime;
+  S.deepestLayer = CFG.LAYER_COUNT - 1;
+  S.lastRunEscaped = true;
+  S.inputLock = 1.0;
+  S.shake = 8;
+  sndWin();
+  spawnWinParticles();
+  if (S.finalTime < S.bestTime) {
+    S.bestTime = S.finalTime;
+    try { localStorage.setItem('railgrind.best.time', String(S.finalTime)); } catch (e) {}
+  }
+}
+
+// ============================================================
+// STATE TRANSITIONS
 // ============================================================
 function startGame() {
   S.state = 'playing';
   S.stateTime = 0;
   S.playTime = 0;
-  S.camX = 0; S.prevCamX = 0;
-  S.speed = CFG.SPEED_BASE;
-  S.cartY = CFG.RAIL_Y; S.prevCartY = CFG.RAIL_Y;
+  S.particles = [];
+  S.ghost = null;
+  S.shake = 0;
+  S.inputLock = 0;
+  S.portalCooldown = 0;
+
+  // Spawn on the first rail of layer 0
+  const firstRail = WORLD.rails.find(r => r.layerIdx === 0);
+  S.cartX = firstRail.x1 + 80;
+  S.cartY = railYAt(firstRail, S.cartX);
+  S.currentRail = firstRail;
+  S.airborne = false;
+  S.cartVX = CFG.BASE_SPEED;
   S.cartVY = 0;
-  S.cartOnRail = true;
+  S.cartRot = Math.atan(firstRail.slope);
+  S.prevCartX = S.cartX;
+  S.prevCartY = S.cartY;
+  S.prevRot = S.cartRot;
   S.coyote = 0;
   S.jumpBuffer = 0;
-  S.tiles = [];
-  S.firstTileIdx = 0;
-  S.nextChunkTile = 0;
-  S.enemies = [];
-  S.particles = [];
-  S.distanceM = 0;
-  S.shake = 0;
-  S.lastNonFlat = false;
-  S.chunksSinceFlat = 0;
-  // Comfortable runway
-  pushChunk(20);
-  ensureWorldAhead();
+  S.camX = S.cartX - CFG.CART_SCREEN_X;
+  S.camY = S.cartY - CFG.CART_SCREEN_Y;
+  S.currentLayer = 0;
+  S.prevLayer = -1;
+  S.deepestLayer = 0;
+  S.lastRunEscaped = false;
+  S.initials = '';
+  S.scoreSubmitted = false;
+  resetHazards();
+}
+
+function submitInitials() {
+  if (S.scoreSubmitted) return;
+  const ini = S.initials.trim().toUpperCase().slice(0, 3);
+  if (!ini) { skipInitials(); return; }
+  S.scoreSubmitted = true;
+  saveScore(ini, S.finalTime, S.deepestLayer, S.lastRunEscaped);
+  fetchScores();
+  S.state = 'title';
+  S.stateTime = 0;
+  S.initials = '';
+}
+
+function skipInitials() {
+  S.scoreSubmitted = true;
+  S.state = 'title';
+  S.stateTime = 0;
+  S.initials = '';
 }
 
 function enterTitle() {
   S.state = 'title';
   S.stateTime = 0;
-  S.camX = 0;
-  S.tiles = [];
-  S.firstTileIdx = 0;
-  S.nextChunkTile = 0;
-  S.enemies = [];
   S.particles = [];
-  S.cartY = CFG.RAIL_Y;
+  S.ghost = null;
+  S.shake = 0;
+  S.inputLock = 0;
+
+  // Title camera: show layer 0 drifting forward
+  const firstRail = WORLD.rails.find(r => r.layerIdx === 0);
+  S.cartX = firstRail.x1 + 120;
+  S.cartY = railYAt(firstRail, S.cartX);
+  S.currentRail = firstRail;
+  S.airborne = false;
+  S.cartVX = CFG.BASE_SPEED * 0.6;
   S.cartVY = 0;
-  S.cartOnRail = true;
-  S.distanceM = 0;
-  pushChunk(120);  // long flat runway for title scroll
+  S.cartRot = 0;
+  S.camX = S.cartX - CFG.CART_SCREEN_X;
+  S.camY = S.cartY - CFG.CART_SCREEN_Y;
+  S.currentLayer = 0;
 }
 
 // ============================================================
-// === RENDER HELPERS =========================================
+// HUD / OVERLAYS
 // ============================================================
-function drawText(text, x, y, size, color, outlineColor, outlineW) {
-  ctx.font = `900 ${size}px "Arial Black", Impact, system-ui, sans-serif`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.lineJoin = 'round';
-  ctx.lineWidth = outlineW || 4;
-  ctx.strokeStyle = outlineColor || CFG.C_BLACK;
-  ctx.strokeText(text, x, y);
-  ctx.fillStyle = color;
-  ctx.fillText(text, x, y);
+function fmtTime(t) {
+  if (!isFinite(t)) return '--:--.--';
+  const m = Math.floor(t / 60);
+  const s = Math.floor(t % 60);
+  const ms = Math.floor((t - Math.floor(t)) * 100);
+  return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0') + '.' + String(ms).padStart(2, '0');
 }
 
-function sticker(text, x, y, w, h, rot, bgColor, textColor, fontPx) {
+function drawHUD() {
   ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(rot);
-  ctx.lineJoin = 'round';
-  ctx.lineWidth = 3.5;
-  ctx.strokeStyle = CFG.C_BLACK;
-  ctx.fillStyle = bgColor;
-  ctx.fillRect(-w * 0.5, -h * 0.5, w, h);
-  ctx.strokeRect(-w * 0.5, -h * 0.5, w, h);
-  ctx.font = `900 ${fontPx}px "Arial Black", Impact, system-ui, sans-serif`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillStyle = textColor;
-  ctx.fillText(text, 0, 2);
-  ctx.restore();
-}
 
-// ============================================================
-// === BACKGROUND (parallax) ==================================
-// ============================================================
-const BG_TAGS = ['RAIL', 'GRIND', 'XXX', 'VOID', '888', 'GO', '→→→', 'FAST', 'RLY?'];
-
-function prng(n) {
-  let x = Math.sin(n * 9301.23 + 49297.13) * 233280;
-  return x - Math.floor(x);
-}
-
-function drawBackground(renderCamX) {
-  // Sky / deep tunnel bands
-  ctx.fillStyle = CFG.C_DARK;
-  ctx.fillRect(0, 0, CFG.W, CFG.H);
-  ctx.fillStyle = CFG.C_SUB;
-  ctx.fillRect(0, 0, CFG.W, 210);
-
-  // Far silhouettes
-  drawSilhouette(renderCamX, 0.12, 260, 70, CFG.C_SUB, 17, false);
-  // Mid silhouettes
-  drawSilhouette(renderCamX, 0.30, 330, 90, CFG.C_MID, 29, true);
-  // Background graffiti tags (mid layer)
-  drawBgTags(renderCamX, 0.24);
-  // Near silhouettes (under rail)
-  drawSilhouette(renderCamX, 0.55, CFG.RAIL_Y + 14, 60, '#0a1420', 41, true);
-}
-
-function drawSilhouette(renderCamX, par, baseY, amp, color, seed, outline) {
-  const offset = renderCamX * par;
-  const step = 140;
-  const startX = -140 - (((offset % step) + step) % step);
-  ctx.fillStyle = color;
-  ctx.strokeStyle = CFG.C_BLACK;
-  ctx.lineJoin = 'round';
-  ctx.lineWidth = 2.5;
-  ctx.beginPath();
-  ctx.moveTo(-40, CFG.H + 20);
-  for (let x = startX; x < CFG.W + step + 40; x += step) {
-    const n = Math.floor((x + offset) / step) + seed;
-    const h1 = baseY - amp * (0.5 + 0.5 * Math.sin(n * 1.37));
-    const h2 = baseY - amp * (0.3 + 0.7 * Math.sin(n * 2.13 + 1.1));
-    ctx.lineTo(x, h1);
-    ctx.lineTo(x + step * 0.5, h2);
+  if (sidebarMode) {
+    // Sidebars carry the rich HUD — keep the game viewport clean. Only show
+    // a small current-circle banner at the top so the player knows their depth.
+    const layerName = LAYERS[S.currentLayer]?.name || '';
+    ctx.font = '900 12px Impact, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = 'rgba(230,217,192,0.45)';
+    ctx.fillText('CIRCLE ' + (S.currentLayer + 1), CFG.W * 0.5, 14);
+    ctx.font = '900 22px Impact, system-ui, sans-serif';
+    ctx.shadowColor = CFG.C_NEON_A;
+    ctx.shadowBlur = 10;
+    ctx.fillStyle = CFG.C_NEON_A;
+    ctx.fillText(layerName, CFG.W * 0.5, 28);
+    ctx.shadowBlur = 0;
+    ctx.restore();
+    drawHazardHUD();
+    return;
   }
-  ctx.lineTo(CFG.W + 80, CFG.H + 20);
-  ctx.closePath();
-  ctx.fill();
-  if (outline) ctx.stroke();
+
+  // Narrow mode (mobile portrait): compact in-viewport HUD
+  const timeStr = fmtTime(S.playTime);
+  ctx.font = '900 22px Impact, "Arial Black", system-ui, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.shadowColor = CFG.C_NEON_C;
+  ctx.shadowBlur = 12;
+  ctx.fillStyle = CFG.C_NEON_C;
+  ctx.fillText(timeStr, 16, 16);
+  ctx.shadowBlur = 3;
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillText(timeStr, 16, 16);
+  ctx.shadowBlur = 0;
+
+  const layerName = LAYERS[S.currentLayer]?.name || '';
+  ctx.font = '900 12px Impact, system-ui, sans-serif';
+  ctx.fillStyle = 'rgba(230,217,192,0.6)';
+  ctx.fillText('CIRCLE ' + (S.currentLayer + 1) + ' / 9', 18, 46);
+  ctx.font = '900 18px Impact, system-ui, sans-serif';
+  ctx.shadowColor = CFG.C_NEON_A;
+  ctx.shadowBlur = 8;
+  ctx.fillStyle = CFG.C_NEON_A;
+  ctx.fillText(layerName, 18, 60);
+  ctx.shadowBlur = 0;
+
+  // Best on the right
+  ctx.font = '900 13px Impact, system-ui, sans-serif';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'top';
+  const best = isFinite(S.bestTime) ? fmtTime(S.bestTime) : '--:--.--';
+  ctx.fillStyle = 'rgba(255,176,64,0.8)';
+  ctx.fillText('BEST ' + best, CFG.W - 16, 18);
+
+  drawLayerProgressBar();
+  ctx.restore();
+  drawHazardHUD();
 }
 
-function drawBgTags(renderCamX, par) {
-  const off = renderCamX * par;
-  const spacing = 360;
-  const start = Math.floor((off - 200) / spacing);
-  const end = Math.floor((off + CFG.W + 200) / spacing);
-  for (let i = start; i <= end; i++) {
-    const x = i * spacing - off;
-    const seed = prng(i * 17.3 + 4.7);
-    if (seed < 0.12) continue;  // skip some
-    const tag = BG_TAGS[(seed * BG_TAGS.length) | 0];
-    const y = 105 + seed * 130;
-    const rot = (seed - 0.5) * 0.45;
-    const size = 42 + (seed * 26) | 0;
-    const hue = prng(i * 11.1 + 2.3);
-    const col = hue < 0.4 ? CFG.C_PINK : hue < 0.75 ? CFG.C_CYAN : CFG.C_YELLOW;
+function drawHazardHUD() {
+  if (!S.mech) return;
+
+  // Entry banner — shown for ~2.4s each time S.currentLayer changes
+  const bannerLife = 2.4;
+  const bAge = S.playTime - S.bannerAt;
+  if (S.bannerText && bAge >= 0 && bAge < bannerLife) {
+    const t = bAge / bannerLife;
+    // Fade in quickly, hold, fade out
+    let alpha = 1;
+    if (t < 0.12) alpha = t / 0.12;
+    else if (t > 0.75) alpha = 1 - (t - 0.75) / 0.25;
     ctx.save();
-    ctx.translate(x, y);
-    ctx.rotate(rot);
-    ctx.font = `900 ${size}px Impact, "Arial Black", system-ui, sans-serif`;
+    ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
+    const cx = CFG.W * 0.5, cy = 88;
+    // Backing strip
+    ctx.fillStyle = 'rgba(8, 6, 14, 0.72)';
+    ctx.fillRect(cx - 220, cy - 26, 440, 52);
+    ctx.strokeStyle = 'rgba(201, 165, 85, 0.5)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(cx - 220, cy - 26, 440, 52);
+    drawNeonText(S.bannerText, cx, cy - 6, 22, CFG.C_NEON_A, 0);
+    ctx.font = '900 14px Impact, system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.lineJoin = 'round';
-    ctx.lineWidth = 5;
-    ctx.strokeStyle = CFG.C_BLACK;
-    ctx.strokeText(tag, 0, 0);
-    ctx.globalAlpha = 0.55;
-    ctx.fillStyle = col;
-    ctx.fillText(tag, 0, 0);
-    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#E6D9C0';
+    ctx.fillText(S.bannerSub, cx, cy + 14);
     ctx.restore();
   }
-}
 
-// ============================================================
-// === RAIL ===================================================
-// ============================================================
-function drawRail(renderCamX) {
-  const firstTile = Math.floor(renderCamX / CFG.TILE) - 1;
-  const lastTile = Math.ceil((renderCamX + CFG.W) / CFG.TILE) + 1;
-
-  // Walk tiles and draw contiguous solid runs
-  let runStart = null;
-  for (let i = firstTile; i <= lastTile + 1; i++) {
-    const local = i - S.firstTileIdx;
-    const solid = local >= 0 && local < S.tiles.length ? S.tiles[local] : false;
-    if (solid && runStart == null) runStart = i;
-    if (!solid && runStart != null) {
-      drawRailSegment(runStart * CFG.TILE - renderCamX, i * CFG.TILE - renderCamX);
-      runStart = null;
+  // Coin counter (Greed)
+  if (S.currentLayer === 5) {
+    const hz = hazardOfLayer(5);
+    if (hz && hz.type === 'greed') {
+      let n = 0;
+      for (const k of S.mech.coinsTaken) if (k.startsWith('5:')) n++;
+      const locked = S.mech.portalLocked.has(5);
+      const cx = CFG.W - 110, cy = 90;
+      ctx.save();
+      ctx.fillStyle = 'rgba(8, 6, 14, 0.7)';
+      ctx.fillRect(cx - 4, cy - 20, 100, 52);
+      ctx.strokeStyle = locked ? '#E05050' : 'rgba(244, 208, 63, 0.6)';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(cx - 4, cy - 20, 100, 52);
+      ctx.font = '900 10px Impact, system-ui, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = locked ? '#FF7070' : '#F4D03F';
+      ctx.fillText(locked ? 'PORTAL SEALED' : 'GREED', cx, cy - 16);
+      ctx.font = '900 28px Impact, system-ui, sans-serif';
+      ctx.shadowColor = locked ? '#E05050' : '#F4D03F';
+      ctx.shadowBlur = 10;
+      ctx.fillStyle = locked ? '#FF5050' : '#F4D03F';
+      ctx.fillText(n + ' / ' + hz.limit, cx, cy);
+      ctx.shadowBlur = 0;
+      ctx.restore();
     }
   }
-}
 
-function drawRailSegment(x1, x2) {
-  const y = CFG.RAIL_Y;
-  const w = x2 - x1;
-
-  // Support pillar (trapezoidal chunk going into darkness)
-  ctx.save();
-  ctx.lineJoin = 'round';
-  ctx.lineWidth = CFG.OUTLINE;
-  ctx.strokeStyle = CFG.C_BLACK;
-  ctx.fillStyle = '#162938';
-  ctx.beginPath();
-  ctx.moveTo(x1, y + 8);
-  ctx.lineTo(x2, y + 8);
-  ctx.lineTo(x2 - 16, CFG.H + 20);
-  ctx.lineTo(x1 + 16, CFG.H + 20);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-
-  // Halftone overlay on support
-  ctx.save();
-  ctx.clip();
-  ctx.fillStyle = halftoneDark;
-  ctx.fillRect(x1 - 4, y + 8, w + 8, CFG.H);
-  ctx.restore();
-
-  // Cel-shade band (left underside darker)
-  ctx.fillStyle = 'rgba(10,10,15,0.35)';
-  ctx.beginPath();
-  ctx.moveTo(x1, y + 8);
-  ctx.lineTo(x1 + 18, y + 8);
-  ctx.lineTo(x1 + 30, CFG.H + 20);
-  ctx.lineTo(x1 + 16, CFG.H + 20);
-  ctx.closePath();
-  ctx.fill();
-
-  // Crossties
-  ctx.fillStyle = '#2a3e4e';
-  ctx.strokeStyle = CFG.C_BLACK;
-  ctx.lineWidth = 2;
-  const tieW = 16, tieH = 9, tieSpacing = 32;
-  const camRel = x1;  // already screen coords
-  const worldX1 = x1 + S.camX;
-  const tieOffset = ((worldX1 % tieSpacing) + tieSpacing) % tieSpacing;
-  for (let tx = x1 - tieOffset + 6; tx < x2; tx += tieSpacing) {
-    if (tx + tieW * 0.5 < x1 || tx - tieW * 0.5 > x2) continue;
-    ctx.fillRect(tx - tieW * 0.5, y + 4, tieW, tieH);
-    ctx.strokeRect(tx - tieW * 0.5, y + 4, tieW, tieH);
-  }
-
-  // Top rail strip (highlight)
-  ctx.fillStyle = CFG.C_BONE;
-  ctx.strokeStyle = CFG.C_BLACK;
-  ctx.lineWidth = CFG.OUTLINE;
-  ctx.fillRect(x1, y - 3, w, 5);
-  ctx.strokeRect(x1, y - 3, w, 5);
-
-  // Inner rail accent
-  ctx.fillStyle = CFG.C_CYAN;
-  ctx.fillRect(x1 + 1, y - 1, w - 2, 2);
-
-  ctx.restore();
-}
-
-// ============================================================
-// === ENTITIES (cart, enemy) =================================
-// ============================================================
-function drawCart(renderCartY, onRail) {
-  const x = CFG.CART_SCREEN_X;
-  const y = renderCartY;
-  const bob = onRail ? Math.sin(S.playTime * 24) * 1.5 : 0;
-
-  // Wheels (behind body)
-  drawWheel(x - 18, y + 4);
-  drawWheel(x + 18, y + 4);
-
-  ctx.save();
-  ctx.translate(x, y - CFG.CART_H + bob);
-  const bw = CFG.CART_W, bh = CFG.CART_H;
-
-  // Body (pink)
-  ctx.lineJoin = 'round';
-  ctx.lineWidth = CFG.OUTLINE;
-  ctx.strokeStyle = CFG.C_BLACK;
-  ctx.fillStyle = CFG.C_PINK;
-  ctx.beginPath();
-  ctx.moveTo(-bw * 0.5,     bh - 2);
-  ctx.lineTo(-bw * 0.5 - 5, 8);
-  ctx.lineTo(-bw * 0.5 + 4, -3);
-  ctx.lineTo( bw * 0.5 - 4, -3);
-  ctx.lineTo( bw * 0.5 + 5, 8);
-  ctx.lineTo( bw * 0.5,     bh - 2);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-
-  // Cel-shade band (left/bottom darker)
-  ctx.fillStyle = 'rgba(10,10,15,0.30)';
-  ctx.beginPath();
-  ctx.moveTo(-bw * 0.5,     bh - 2);
-  ctx.lineTo(-bw * 0.5 - 5, 8);
-  ctx.lineTo(-bw * 0.5 + 4, -3);
-  ctx.lineTo(-bw * 0.5 + 12, -3);
-  ctx.lineTo(-bw * 0.5 + 10, 6);
-  ctx.lineTo(-bw * 0.5 + 10, bh - 2);
-  ctx.closePath();
-  ctx.fill();
-
-  // Halftone on body
-  ctx.save();
-  ctx.beginPath();
-  ctx.moveTo(-bw * 0.5,     bh - 2);
-  ctx.lineTo(-bw * 0.5 - 5, 8);
-  ctx.lineTo(-bw * 0.5 + 4, -3);
-  ctx.lineTo( bw * 0.5 - 4, -3);
-  ctx.lineTo( bw * 0.5 + 5, 8);
-  ctx.lineTo( bw * 0.5,     bh - 2);
-  ctx.closePath();
-  ctx.clip();
-  ctx.fillStyle = halftonePink;
-  ctx.globalAlpha = 0.8;
-  ctx.fillRect(-bw, -bh, bw * 2, bh * 2);
-  ctx.globalAlpha = 1;
-  ctx.restore();
-
-  // Yellow trim along top rim
-  ctx.fillStyle = CFG.C_YELLOW;
-  ctx.strokeStyle = CFG.C_BLACK;
-  ctx.lineWidth = 2.5;
-  ctx.fillRect(-bw * 0.5 + 2, -3, bw - 4, 5);
-  ctx.strokeRect(-bw * 0.5 + 2, -3, bw - 4, 5);
-
-  // Rider head
-  ctx.fillStyle = CFG.C_BONE;
-  ctx.lineWidth = CFG.OUTLINE;
-  ctx.strokeStyle = CFG.C_BLACK;
-  ctx.beginPath();
-  ctx.arc(0, -11, 9, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
-
-  // Goggles
-  ctx.fillStyle = CFG.C_BLACK;
-  ctx.fillRect(-9, -14, 18, 5);
-  ctx.fillStyle = CFG.C_CYAN;
-  ctx.fillRect(-7, -13, 5, 2);
-  ctx.fillRect( 2, -13, 5, 2);
-
-  // Little antenna flag
-  ctx.strokeStyle = CFG.C_BLACK;
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(6, -19);
-  ctx.lineTo(10, -26);
-  ctx.stroke();
-  ctx.fillStyle = CFG.C_PINK;
-  ctx.beginPath();
-  ctx.moveTo(10, -26); ctx.lineTo(16, -25); ctx.lineTo(10, -22);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-
-  ctx.restore();
-
-  // Speed lines when moving fast
-  if (S.speed > CFG.SPEED_BASE + 10 && onRail) {
-    ctx.strokeStyle = CFG.C_YELLOW;
-    ctx.lineWidth = 3;
-    ctx.lineCap = 'round';
-    for (let i = 0; i < 4; i++) {
-      const phase = (S.playTime * 600 + i * 35) % 60;
-      const lx = x - 40 - i * 16 - phase * 0.3;
-      const ly = y - 16 - i * 9;
-      ctx.beginPath();
-      ctx.moveTo(lx, ly);
-      ctx.lineTo(lx - 18, ly);
-      ctx.stroke();
-    }
-  }
-}
-
-function drawWheel(x, y) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate((S.camX / 14) % (Math.PI * 2));
-  ctx.lineJoin = 'round';
-  ctx.lineWidth = CFG.OUTLINE;
-  ctx.strokeStyle = CFG.C_BLACK;
-
-  // Tire
-  ctx.fillStyle = CFG.C_BLACK;
-  ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI * 2); ctx.fill();
-
-  // Hub
-  ctx.fillStyle = CFG.C_YELLOW;
-  ctx.beginPath(); ctx.arc(0, 0, 7.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-
-  // Spokes
-  ctx.strokeStyle = CFG.C_BLACK;
-  ctx.lineWidth = 2.2;
-  ctx.beginPath();
-  ctx.moveTo(-7, 0); ctx.lineTo(7, 0);
-  ctx.moveTo(0, -7); ctx.lineTo(0, 7);
-  ctx.stroke();
-  ctx.restore();
-}
-
-function drawEnemies(renderCamX) {
-  for (const e of S.enemies) {
-    const wx = (e.tileIdx + 0.5) * CFG.TILE;
-    const sx = wx - renderCamX;
-    if (sx < -60 || sx > CFG.W + 60) continue;
-
-    const y = CFG.RAIL_Y - 14 + Math.sin(e.bob * 4) * 2;
+  // Wind indicator (Lust)
+  if (S.currentLayer === 7) {
+    const w = S.mech.wind.current || 0;
+    const cx = CFG.W * 0.5, cy = 52;
     ctx.save();
-    ctx.translate(sx, y);
-    ctx.lineJoin = 'round';
-    ctx.lineWidth = CFG.OUTLINE;
-    ctx.strokeStyle = CFG.C_BLACK;
-
-    // Spikes
-    ctx.fillStyle = CFG.C_BLACK;
-    for (let i = -2; i <= 2; i++) {
+    ctx.font = '900 10px Impact, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(230, 217, 192, 0.75)';
+    ctx.fillText('WIND', cx, cy - 14);
+    // Bar from center
+    const maxMag = 160;
+    const mag = Math.max(-maxMag, Math.min(maxMag, w));
+    const barLen = 90;
+    const barX = cx - barLen;
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    ctx.fillRect(barX, cy - 4, barLen * 2, 8);
+    ctx.fillStyle = w >= 0 ? '#B080FF' : '#6DFFEC';
+    const dir = Math.sign(mag) || 1;
+    const fillLen = Math.abs(mag / maxMag) * barLen;
+    ctx.fillRect(cx, cy - 4, fillLen * dir, 8);
+    // Tick at center
+    ctx.strokeStyle = 'rgba(230,217,192,0.7)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - 7);
+    ctx.lineTo(cx, cy + 7);
+    ctx.stroke();
+    // Arrow
+    if (Math.abs(mag) > 20) {
+      const ax = cx + fillLen * dir + 10 * dir;
+      ctx.fillStyle = w >= 0 ? '#B080FF' : '#6DFFEC';
       ctx.beginPath();
-      ctx.moveTo(i * 7 - 4, -3);
-      ctx.lineTo(i * 7, -17);
-      ctx.lineTo(i * 7 + 4, -3);
+      ctx.moveTo(ax, cy);
+      ctx.lineTo(ax - 8 * dir, cy - 5);
+      ctx.lineTo(ax - 8 * dir, cy + 5);
       ctx.closePath();
       ctx.fill();
-      ctx.stroke();
     }
-
-    // Body (pink ellipse)
-    ctx.fillStyle = CFG.C_PINK;
-    ctx.beginPath();
-    ctx.ellipse(0, 0, 19, 14, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-
-    // Cel shade underside
-    ctx.fillStyle = 'rgba(10,10,15,0.35)';
-    ctx.beginPath();
-    ctx.ellipse(-2, 4, 16, 9, 0, 0, Math.PI);
-    ctx.fill();
-
-    // Eye
-    ctx.fillStyle = CFG.C_YELLOW;
-    ctx.beginPath();
-    ctx.arc(3, -2, 6, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = CFG.C_BLACK;
-    ctx.beginPath();
-    ctx.arc(4 + Math.sin(e.bob * 1.3) * 1.5, -2, 2.7, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Little feet
-    ctx.fillStyle = CFG.C_BLACK;
-    ctx.fillRect(-11, 11, 6, 5);
-    ctx.fillRect(  5, 11, 6, 5);
-
     ctx.restore();
   }
-}
 
-// ============================================================
-// === PARTICLES ==============================================
-// ============================================================
-function drawParticles() {
-  for (const p of S.particles) {
-    const a = Math.min(1, p.life / (p.maxLife || 0.5));
+  // Tide indicator (Wrath) — small bar showing how close the tide is to you
+  if (S.currentLayer === 4 && S.mech.tide.active) {
+    const topY = layerTopY(4);
+    const tideRel = S.mech.tide.y - topY;   // 0..LAYER_H
+    const t = Math.max(0, Math.min(1, tideRel / CFG.LAYER_H));
+    const cx = CFG.W - 80, cy = 100;
+    const h = 60, w = 14;
     ctx.save();
-    ctx.translate(p.x, p.y);
-    ctx.rotate(p.rot);
-    ctx.lineJoin = 'round';
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = CFG.C_BLACK;
-    ctx.globalAlpha = a;
-    ctx.fillStyle = p.color;
-    // chunky diamond/square alternation
-    const s = p.size;
-    if ((p.color === CFG.C_YELLOW) || (p.color === CFG.C_CYAN)) {
-      // diamond
-      ctx.beginPath();
-      ctx.moveTo(0, -s * 0.6);
-      ctx.lineTo(s * 0.6, 0);
-      ctx.lineTo(0, s * 0.6);
-      ctx.lineTo(-s * 0.6, 0);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-    } else {
-      ctx.fillRect(-s * 0.5, -s * 0.5, s, s);
-      ctx.strokeRect(-s * 0.5, -s * 0.5, s, s);
-    }
-    ctx.globalAlpha = 1;
+    ctx.fillStyle = 'rgba(10, 2, 4, 0.7)';
+    ctx.fillRect(cx - 2, cy - 2, w + 4, h + 4);
+    ctx.strokeStyle = '#E05050';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(cx, cy, w, h);
+    const fillH = h * (1 - t);
+    ctx.fillStyle = '#A02028';
+    ctx.fillRect(cx, cy + h - fillH, w, fillH);
+    ctx.font = '900 10px Impact, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = '#FF7070';
+    ctx.fillText('TIDE', cx + w * 0.5, cy + h + 6);
     ctx.restore();
   }
 }
 
-// ============================================================
-// === HUD ====================================================
-// ============================================================
-function drawHUD() {
-  const dm = Math.max(0, Math.floor(S.distanceM));
-  const distStr = String(dm).padStart(4, '0') + ' M';
-  sticker(distStr, 100, 44, 160, 48, -0.04, CFG.C_BONE, CFG.C_BLACK, 26);
+function drawLeftSidebar() {
+  const x = 0, y = 0, w = CFG.SIDEBAR_W, h = CFG.H;
+  // Panel
+  const bg = ctx.createLinearGradient(x, 0, x + w, 0);
+  bg.addColorStop(0, '#08060F');
+  bg.addColorStop(1, '#100A18');
+  ctx.fillStyle = bg;
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = 'rgba(110,90,160,0.25)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x + w - 0.5, 0);
+  ctx.lineTo(x + w - 0.5, h);
+  ctx.stroke();
 
-  const bestStr = 'BEST ' + String(S.best).padStart(4, '0');
-  sticker(bestStr, CFG.W - 108, 40, 180, 34, 0.05, CFG.C_YELLOW, CFG.C_BLACK, 18);
+  // Title
+  ctx.save();
+  ctx.font = '900 12px Impact, system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = 'rgba(230,217,192,0.55)';
+  ctx.fillText('THE NINE', w * 0.5, 14);
+  ctx.fillText('CIRCLES', w * 0.5, 28);
+  ctx.restore();
+
+  // List entries — top = layer 8 (summit), bottom = layer 0 (pit)
+  const listTop = 58;
+  const rowH = 38;
+  const romans = ['IX','VIII','VII','VI','V','IV','III','II','I'];
+  for (let i = 0; i < 9; i++) {
+    const displayIdx = i;               // 0..8 in display order, 0 = top
+    const layerIdx = 8 - i;             // layer 8 (LIMBO) at top, layer 0 at bottom
+    const L = LAYERS[layerIdx];
+    const ry = listTop + displayIdx * rowH;
+    const isCurrent = (layerIdx === S.currentLayer && S.state === 'playing');
+    const visited = (layerIdx >= S.currentLayer);  // same-or-higher layers we've passed
+
+    if (isCurrent) {
+      ctx.fillStyle = 'rgba(255,176,64,0.15)';
+      ctx.fillRect(x + 4, ry - 4, w - 8, rowH - 4);
+      ctx.strokeStyle = CFG.C_NEON_A;
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(x + 4, ry - 4, w - 8, rowH - 4);
+    }
+
+    const alpha = isCurrent ? 1 : (visited ? 0.55 : 0.3);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.font = '900 11px Impact, system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = isCurrent ? CFG.C_NEON_A : 'rgba(230,217,192,0.8)';
+    ctx.fillText(romans[i], x + 10, ry);
+    ctx.font = '900 14px Impact, system-ui, sans-serif';
+    ctx.fillStyle = isCurrent ? '#FFFFFF' : 'rgba(230,217,192,0.8)';
+    ctx.fillText(L.name, x + 32, ry);
+    // Role label
+    ctx.font = '700 9px system-ui, sans-serif';
+    ctx.fillStyle = 'rgba(230,217,192,0.5)';
+    const role = layerIdx === 0 ? 'PIT FLOOR' : (layerIdx === 8 ? 'SUMMIT' : 'CLIMB');
+    ctx.fillText(role, x + 32, ry + 18);
+    ctx.restore();
+  }
+}
+
+function drawRightSidebar() {
+  const x = CANVAS_W - CFG.SIDEBAR_W, y = 0, w = CFG.SIDEBAR_W, h = CFG.H;
+  const bg = ctx.createLinearGradient(x, 0, x + w, 0);
+  bg.addColorStop(0, '#100A18');
+  bg.addColorStop(1, '#08060F');
+  ctx.fillStyle = bg;
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = 'rgba(110,90,160,0.25)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x + 0.5, 0);
+  ctx.lineTo(x + 0.5, h);
+  ctx.stroke();
+
+  // RUN TIME label + big clock
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.font = '900 12px Impact, system-ui, sans-serif';
+  ctx.fillStyle = 'rgba(230,217,192,0.55)';
+  ctx.fillText('RUN TIME', x + w * 0.5, 20);
+
+  const timeStr = fmtTime(S.state === 'playing' || S.state === 'dying' ? S.playTime : S.finalTime || 0);
+  ctx.font = '900 22px "Courier New", monospace';
+  ctx.shadowColor = CFG.C_NEON_C;
+  ctx.shadowBlur = 12;
+  ctx.fillStyle = CFG.C_NEON_C;
+  ctx.fillText(timeStr, x + w * 0.5, 38);
+  ctx.shadowBlur = 0;
+
+  // BEST
+  ctx.font = '900 12px Impact, system-ui, sans-serif';
+  ctx.fillStyle = 'rgba(230,217,192,0.55)';
+  ctx.fillText('BEST ESCAPE', x + w * 0.5, 82);
+  const best = isFinite(S.bestTime) ? fmtTime(S.bestTime) : '--:--.--';
+  ctx.font = '900 18px "Courier New", monospace';
+  ctx.shadowColor = CFG.C_NEON_A;
+  ctx.shadowBlur = 10;
+  ctx.fillStyle = CFG.C_NEON_A;
+  ctx.fillText(best, x + w * 0.5, 100);
+  ctx.shadowBlur = 0;
+
+  // Divider
+  ctx.strokeStyle = 'rgba(110,90,160,0.35)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x + 14, 140);
+  ctx.lineTo(x + w - 14, 140);
+  ctx.stroke();
+
+  // Vertical progress ("depth" bar)
+  ctx.font = '900 11px Impact, system-ui, sans-serif';
+  ctx.fillStyle = 'rgba(230,217,192,0.55)';
+  ctx.fillText('DEPTH', x + w * 0.5, 154);
+
+  const barX = x + w * 0.5 - 8, barY = 176, barW = 16, barH = 240;
+  ctx.fillStyle = 'rgba(10,10,18,0.7)';
+  ctx.fillRect(barX, barY, barW, barH);
+  ctx.strokeStyle = 'rgba(230,217,192,0.4)';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(barX, barY, barW, barH);
+  // Tick marks for each circle
+  for (let i = 0; i < 9; i++) {
+    const py = barY + barH - (i / 8) * barH;
+    ctx.strokeStyle = 'rgba(230,217,192,0.25)';
+    ctx.beginPath();
+    ctx.moveTo(barX, py);
+    ctx.lineTo(barX + barW, py);
+    ctx.stroke();
+  }
+  // Cart marker
+  const progressT = (S.cartY >= WORLD.bottomY) ? 0 : Math.max(0, Math.min(1, 1 - S.cartY / WORLD.bottomY));
+  const py = barY + barH - progressT * barH;
+  ctx.fillStyle = CFG.C_NEON_C;
+  ctx.shadowColor = CFG.C_NEON_C;
+  ctx.shadowBlur = 10;
+  ctx.fillRect(barX - 4, py - 3, barW + 8, 6);
+  ctx.shadowBlur = 0;
+
+  // Controls reminder bottom
+  ctx.font = '700 10px system-ui, sans-serif';
+  ctx.fillStyle = 'rgba(230,217,192,0.45)';
+  ctx.fillText('SPACE / TAP', x + w * 0.5, h - 46);
+  ctx.fillText('TO JUMP', x + w * 0.5, h - 32);
+  ctx.fillText('M — MUTE', x + w * 0.5, h - 14);
+
+  ctx.restore();
+}
+
+function drawLayerProgressBar() {
+  const x = CFG.W - 30, y = 60, w = 14, h = 360;
+  ctx.save();
+  ctx.fillStyle = 'rgba(10,10,18,0.6)';
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = 'rgba(230,217,192,0.35)';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(x, y, w, h);
+  // Mark each layer
+  for (let i = 0; i < 9; i++) {
+    const py = y + h - (i / 8) * h;
+    ctx.strokeStyle = 'rgba(230,217,192,0.25)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, py);
+    ctx.lineTo(x + w, py);
+    ctx.stroke();
+  }
+  // Current layer indicator
+  const progressT = (S.cartY >= WORLD.bottomY) ? 0 : (1 - S.cartY / WORLD.bottomY);
+  const py = y + h - progressT * h;
+  ctx.fillStyle = CFG.C_NEON_C;
+  ctx.shadowColor = CFG.C_NEON_C;
+  ctx.shadowBlur = 12;
+  ctx.fillRect(x - 4, py - 3, w + 8, 6);
+  ctx.shadowBlur = 0;
+  ctx.restore();
 }
 
 function drawTitleOverlay() {
-  // Big RAILGRIND tag, slight tilt + bob
-  const bob = Math.sin(S.titleBob) * 4;
-  ctx.save();
-  ctx.translate(CFG.W * 0.5, 170 + bob);
-  ctx.rotate(-0.035);
+  const bob = Math.sin(S.titleBob * 2) * 4;
+  const cx = CFG.W * 0.5;
 
-  // Back shadow tag (offset pink)
-  drawText('RAILGRIND', 5, 6, 112, CFG.C_PINK, CFG.C_BLACK, 11);
-  // Front tag
-  drawText('RAILGRIND', 0, 0, 112, CFG.C_BONE, CFG.C_BLACK, 11);
+  drawNeonText('RAILGRIND', cx, 150 + bob, 84, CFG.C_NEON_A, -0.02);
+  drawNeonText('NINE CIRCLES', cx, 210, 30, CFG.C_NEON_P, 0);
+
+  const pulse = 0.6 + 0.4 * Math.sin(S.titleBob * 3);
+  ctx.save();
+  ctx.globalAlpha = pulse;
+  drawNeonText('PRESS · TAP · TO DESCEND', cx, 282, 26, CFG.C_NEON_C, 0);
   ctx.restore();
 
-  // Subtitle ribbon
-  const pulse = 0.8 + 0.2 * Math.sin(S.titleBob * 2);
-  ctx.globalAlpha = pulse;
-  sticker('SPACE / TAP TO GRIND', CFG.W * 0.5, 265, 360, 50, 0.03, CFG.C_CYAN, CFG.C_BLACK, 26);
-  ctx.globalAlpha = 1;
-
-  // Best
-  if (S.best > 0) {
-    drawText('BEST  ' + String(S.best).padStart(4, '0') + ' M', CFG.W * 0.5, 320, 22, CFG.C_YELLOW, CFG.C_BLACK, 4);
+  if (isFinite(S.bestTime)) {
+    drawNeonText('BEST ESCAPE  ' + fmtTime(S.bestTime), cx, 334, 22, CFG.C_NEON_A, 0);
   }
 
-  // Footer hint
-  drawText('M  MUTE   ·   ARROW / W / SPACE / TAP  JUMP', CFG.W * 0.5, CFG.H - 26, 14, CFG.C_BONE, CFG.C_BLACK, 3);
+  drawLeaderboardList(cx, 374, 5);
+
+  if (editorOverrideActive) {
+    ctx.save();
+    ctx.font = '900 12px Impact, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#9B7BFF';
+    ctx.shadowColor = '#9B7BFF';
+    ctx.shadowBlur = 6;
+    ctx.fillText('◆ EDITOR LEVEL ◆', cx, 250);
+    ctx.shadowBlur = 0;
+    ctx.restore();
+  }
+
+  ctx.save();
+  ctx.font = '700 11px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(226,217,192,0.55)';
+  ctx.fillText('SPACE / W / UP / TAP — JUMP       M — MUTE', cx, CFG.H - 46);
+  ctx.fillStyle = 'rgba(226,217,192,0.45)';
+  ctx.fillText('FALL THROUGH MINE-HOLES TO CLIMB · AVOID THE PIT', cx, CFG.H - 28);
+  ctx.restore();
 }
 
 function drawGameOverOverlay() {
-  // dark wash
-  ctx.fillStyle = 'rgba(10,10,15,0.55)';
+  ctx.fillStyle = 'rgba(5,5,10,0.65)';
   ctx.fillRect(0, 0, CFG.W, CFG.H);
 
-  // WIPEOUT sticker — pop in
-  const t = Math.min(1, S.stateTime / 0.35);
-  const scl = 0.55 + t * 0.5;
+  const t = Math.min(1, S.stateTime / 0.5);
+  const scl = 0.6 + t * 0.45;
   ctx.save();
-  ctx.translate(CFG.W * 0.5, CFG.H * 0.5 - 30);
-  ctx.rotate(-0.07);
+  ctx.translate(CFG.W * 0.5, CFG.H * 0.3);
   ctx.scale(scl, scl);
-  sticker('WIPEOUT', 0, 0, 420, 112, 0, CFG.C_PINK, CFG.C_BONE, 72);
+  ctx.rotate(-0.03);
+  drawNeonText('IMPALED', 0, 0, 84, CFG.C_NEON_P, 0);
   ctx.restore();
 
-  drawText(String(Math.floor(S.distanceM)).padStart(4, '0') + ' M',
-    CFG.W * 0.5, CFG.H * 0.5 + 56, 42, CFG.C_YELLOW, CFG.C_BLACK, 5);
+  drawNeonText('RUN TIME', CFG.W * 0.5, CFG.H * 0.48, 22, CFG.C_BONE, 0);
+  drawNeonText(fmtTime(S.finalTime), CFG.W * 0.5, CFG.H * 0.56, 40, CFG.C_NEON_A, 0);
 
-  if (Math.floor(S.distanceM) >= S.best && S.best > 0) {
-    drawText('NEW BEST', CFG.W * 0.5, CFG.H * 0.5 + 98, 22, CFG.C_CYAN, CFG.C_BLACK, 4);
-  } else {
-    drawText('best  ' + S.best + ' m', CFG.W * 0.5, CFG.H * 0.5 + 98, 18, CFG.C_BONE, CFG.C_BLACK, 3);
+  if (isFinite(S.bestTime)) {
+    ctx.save();
+    ctx.font = '900 18px Impact, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = CFG.C_BONE;
+    ctx.fillText('BEST  ' + fmtTime(S.bestTime), CFG.W * 0.5, CFG.H * 0.66);
+    ctx.restore();
   }
 
   if (S.inputLock <= 0) {
-    const pulse = 0.55 + 0.45 * Math.sin(S.stateTime * 5);
+    const pulse = 0.5 + 0.5 * Math.sin(S.stateTime * 4);
+    ctx.save();
     ctx.globalAlpha = pulse;
-    drawText('SPACE TO RUN IT BACK', CFG.W * 0.5, CFG.H - 80, 26, CFG.C_BONE, CFG.C_BLACK, 4);
-    ctx.globalAlpha = 1;
+    drawNeonText('PRESS · TAP · TO TRY AGAIN', CFG.W * 0.5, CFG.H - 56, 22, CFG.C_NEON_A, 0);
+    ctx.restore();
   }
+}
+
+function drawWinOverlay() {
+  const fade = Math.min(1, S.stateTime / 0.6);
+  ctx.fillStyle = `rgba(6,8,16,${0.55 * fade})`;
+  ctx.fillRect(0, 0, CFG.W, CFG.H);
+
+  const scl = 0.6 + Math.min(1, S.stateTime / 0.35) * 0.5;
+  ctx.save();
+  ctx.translate(CFG.W * 0.5, CFG.H * 0.28);
+  ctx.scale(scl, scl);
+  drawNeonText('ESCAPED', 0, 0, 96, CFG.C_NEON_C, -0.02);
+  ctx.restore();
+
+  drawNeonText('ESCAPE TIME', CFG.W * 0.5, CFG.H * 0.46, 22, CFG.C_BONE, 0);
+  const isNewBest = S.finalTime <= S.bestTime + 0.001;
+  drawNeonText(fmtTime(S.finalTime), CFG.W * 0.5, CFG.H * 0.55,
+    48, isNewBest ? CFG.C_NEON_C : CFG.C_NEON_A, 0);
+
+  if (isNewBest) {
+    const flash = 0.6 + 0.4 * Math.sin(S.stateTime * 8);
+    ctx.save();
+    ctx.globalAlpha = flash;
+    drawNeonText('NEW BEST', CFG.W * 0.5, CFG.H * 0.65, 30, CFG.C_NEON_A, 0);
+    ctx.restore();
+  } else {
+    ctx.save();
+    ctx.font = '900 18px Impact, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = CFG.C_BONE;
+    ctx.fillText('BEST  ' + fmtTime(S.bestTime), CFG.W * 0.5, CFG.H * 0.66);
+    ctx.restore();
+  }
+
+  if (S.inputLock <= 0) {
+    const pulse = 0.5 + 0.5 * Math.sin(S.stateTime * 4);
+    ctx.save();
+    ctx.globalAlpha = pulse;
+    drawNeonText('PRESS · TAP · FOR ANOTHER CLIMB', CFG.W * 0.5, CFG.H - 56, 22, CFG.C_NEON_A, 0);
+    ctx.restore();
+  }
+}
+
+function drawLeaderboardList(cx, topY, count) {
+  const scores = getScores();
+  if (!scores.length) return;
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.font = '900 12px Impact, system-ui, sans-serif';
+  const onlineTag = (LEADERBOARD_API && onlineScores) ? 'LEADERBOARD · ONLINE' : 'LEADERBOARD · LOCAL';
+  ctx.fillStyle = 'rgba(230,217,192,0.6)';
+  ctx.fillText(onlineTag, cx, topY);
+  const rowH = 17;
+  const shown = Math.min(count, scores.length);
+  for (let i = 0; i < shown; i++) {
+    const s = scores[i];
+    const y = topY + 22 + i * rowH;
+    ctx.font = '900 13px "Courier New", monospace';
+    ctx.fillStyle = i === 0 ? CFG.C_NEON_A : 'rgba(230,217,192,0.75)';
+    const rank = String(i + 1).padStart(2, ' ');
+    const ini  = (s.ini || '???').padEnd(3, ' ').slice(0, 3);
+    const t    = (s.time != null) ? fmtTime(s.time) : '--:--.--';
+    const tag  = s.escaped ? 'ESC' : ('C' + String(((s.layer | 0) + 1)).padStart(1, ' '));
+    ctx.fillText(`${rank}.  ${ini}  ${tag}  ${t}`, cx, y);
+  }
+  ctx.restore();
+}
+
+function drawInitialsOverlay() {
+  ctx.fillStyle = 'rgba(5,5,10,0.78)';
+  ctx.fillRect(0, 0, CFG.W, CFG.H);
+
+  const cx = CFG.W * 0.5;
+  const escaped = !!S.lastRunEscaped;
+  drawNeonText(escaped ? 'ESCAPED' : 'IMPALED', cx, 80, 56,
+               escaped ? CFG.C_NEON_C : CFG.C_NEON_P, -0.02);
+
+  ctx.save();
+  ctx.font = '900 14px Impact, system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(230,217,192,0.7)';
+  ctx.fillText(escaped ? 'ESCAPE TIME' : 'RUN TIME', cx, 122);
+  ctx.font = '900 28px "Courier New", monospace';
+  ctx.fillStyle = CFG.C_NEON_A;
+  ctx.shadowColor = CFG.C_NEON_A;
+  ctx.shadowBlur = 10;
+  ctx.fillText(fmtTime(S.finalTime), cx, 142);
+  ctx.shadowBlur = 0;
+  if (!escaped) {
+    ctx.font = '900 12px Impact, system-ui, sans-serif';
+    ctx.fillStyle = 'rgba(230,217,192,0.65)';
+    ctx.shadowBlur = 0;
+    const reached = (S.deepestLayer | 0) + 1;
+    const layerName = (typeof LAYERS !== 'undefined' && LAYERS[S.deepestLayer]?.name) || '';
+    const sub = layerName ? `REACHED CIRCLE ${reached} · ${layerName.toUpperCase()}` : `REACHED CIRCLE ${reached}`;
+    ctx.fillText(sub, cx, 166);
+  }
+  ctx.restore();
+
+  // Initials slots
+  ctx.save();
+  ctx.font = '900 14px Impact, system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(230,217,192,0.7)';
+  ctx.fillText('ENTER YOUR INITIALS', cx, 192);
+
+  const letters = (S.initials || '').padEnd(3, '_');
+  const spacing = 44;
+  const startX = cx - spacing;
+  const baseY = 232;
+  for (let i = 0; i < 3; i++) {
+    const ch = letters[i];
+    const filled = ch !== '_';
+    const isCursor = i === S.initials.length && !filled;
+    const blink = isCursor ? (0.45 + 0.55 * Math.abs(Math.sin(S.stateTime * 6))) : 1;
+    // Slot box
+    ctx.fillStyle = 'rgba(20,16,32,0.6)';
+    ctx.fillRect(startX + i * spacing - 18, baseY - 22, 36, 44);
+    ctx.strokeStyle = filled ? CFG.C_NEON_A : 'rgba(230,217,192,0.4)';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(startX + i * spacing - 18, baseY - 22, 36, 44);
+    ctx.font = '900 32px Impact, system-ui, sans-serif';
+    ctx.fillStyle = filled
+      ? `rgba(255, 176, 64, ${blink})`
+      : `rgba(230,217,192, ${0.35 * blink})`;
+    ctx.fillText(filled ? ch : '·', startX + i * spacing, baseY + 12);
+  }
+  ctx.restore();
+
+  // Hint line
+  ctx.save();
+  ctx.font = '700 11px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(230,217,192,0.55)';
+  ctx.fillText('TYPE 1-3 LETTERS · ENTER TO SUBMIT · ESC TO SKIP', cx, 296);
+  ctx.fillStyle = 'rgba(230,217,192,0.4)';
+  ctx.fillText('(TAP TO ' + (S.initials.length ? 'SUBMIT' : 'SKIP') + ')', cx, 312);
+  ctx.restore();
+
+  // Mini leaderboard preview
+  drawLeaderboardList(cx, 344, 5);
+}
+
+function drawVignette() {
+  const grad = ctx.createRadialGradient(CFG.W * 0.5, CFG.H * 0.55, 140, CFG.W * 0.5, CFG.H * 0.5, CFG.W * 0.75);
+  grad.addColorStop(0, 'rgba(0,0,0,0)');
+  grad.addColorStop(0.7, 'rgba(0,0,0,0.18)');
+  grad.addColorStop(1, 'rgba(0,0,0,0.65)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, CFG.W, CFG.H);
 }
 
 function drawMutedIndicator() {
   if (!S.muted) return;
-  ctx.fillStyle = 'rgba(245,241,232,0.45)';
-  ctx.font = '700 13px system-ui, sans-serif';
+  ctx.save();
+  ctx.fillStyle = 'rgba(226,217,192,0.4)';
+  ctx.font = '700 12px system-ui, sans-serif';
   ctx.textAlign = 'right';
   ctx.textBaseline = 'bottom';
-  ctx.fillText('MUTED · M', CFG.W - 10, CFG.H - 8);
+  ctx.fillText('MUTED · M', CANVAS_W - 12, CFG.H - 8);
+  ctx.restore();
 }
 
 // ============================================================
-// === LOOP ===================================================
+// LOOP
 // ============================================================
 let acc = 0;
 let lastT = performance.now();
@@ -1067,12 +3404,20 @@ function frame(now) {
 
   S.titleBob += dt * 3;
 
-  // State-specific updates
   if (S.state === 'title') {
-    S.camX += CFG.SPEED_BASE * 0.8 * dt;
-    S.prevCamX = S.camX;
-    ensureWorldAhead();
-    cullWorldBehind();
+    S.stateTime += dt;
+    // Drift cart forward on layer 0 for ambient title animation
+    if (S.currentRail) {
+      S.cartX += S.cartVX * dt;
+      if (S.cartX > S.currentRail.x2 - 40) {
+        // Snap back to start for endless drift
+        S.cartX = S.currentRail.x1 + 120;
+      }
+      S.cartY = railYAt(S.currentRail, S.cartX);
+      S.cartRot = Math.atan(S.currentRail.slope);
+    }
+    S.camX += ((S.cartX - CFG.CART_SCREEN_X) - S.camX) * Math.min(1, dt * 6);
+    S.camY += ((S.cartY - CFG.CART_SCREEN_Y) - S.camY) * Math.min(1, dt * 6);
     if (jumpPressed) {
       jumpPressed = false;
       startGame();
@@ -1089,43 +3434,92 @@ function frame(now) {
   } else if (S.state === 'dying') {
     S.stateTime += dt;
     S.freezeFrame = Math.max(0, S.freezeFrame - dt);
+    S.inputLock = Math.max(0, S.inputLock - dt);
     if (S.freezeFrame <= 0) {
-      stepParticles(dt, 900);
+      updateGhost(dt);
+      stepParticles(dt, CFG.GRAVITY * 0.9);
     }
     if (S.shake > 0) {
       S.shake *= Math.pow(0.001, dt);
       if (S.shake < 0.5) S.shake = 0;
     }
-    // consume inputs during death
     jumpPressed = false;
-    if (S.stateTime > CFG.DYING_DURATION) {
+    if (S.stateTime > CFG.GHOST_LIFE + 0.2) {
       S.state = 'over';
       S.stateTime = 0;
+      S.inputLock = 0.5;
     }
   } else if (S.state === 'over') {
     S.stateTime += dt;
     S.inputLock = Math.max(0, S.inputLock - dt);
-    stepParticles(dt, 900);
-    if (S.inputLock > 0) {
+    stepParticles(dt, CFG.GRAVITY * 0.9);
+    updateGhost(dt);
+    if (S.inputLock <= 0 && jumpPressed) {
       jumpPressed = false;
-    } else if (jumpPressed) {
-      jumpPressed = false;
-      startGame();
+      S.state = 'initials';
+      S.stateTime = 0;
+      S.inputLock = 0.25;
+      S.initials = '';
       return requestAnimationFrame(frame);
     }
+    jumpPressed = false;
+  } else if (S.state === 'initials') {
+    S.stateTime += dt;
+    S.inputLock = Math.max(0, S.inputLock - dt);
+    stepParticles(dt, CFG.GRAVITY * 0.9);
+    // Tap (no physical keyboard) skips the prompt — desktop typists press Enter instead.
+    if (S.inputLock <= 0 && jumpPressed) {
+      jumpPressed = false;
+      if (S.initials.length > 0) submitInitials();
+      else skipInitials();
+    }
+    jumpPressed = false;
+  } else if (S.state === 'won') {
+    S.stateTime += dt;
+    S.inputLock = Math.max(0, S.inputLock - dt);
+    stepParticles(dt, CFG.GRAVITY * 0.9);
+    // Shake decays fast and hard-stops after 1s so the victory readout stays legible
+    if (S.shake > 0) {
+      if (S.stateTime >= 1) {
+        S.shake = 0;
+      } else {
+        S.shake *= Math.pow(0.0005, dt);
+        if (S.shake < 0.5) S.shake = 0;
+      }
+    }
+    // Keep cart slowly rolling
+    if (S.currentRail && S.cartX < WORLD.worldW - 60) {
+      S.cartX += Math.max(60, S.cartVX * 0.6) * dt;
+      const r = S.currentRail;
+      if (S.cartX <= r.x2) S.cartY = railYAt(r, S.cartX);
+    }
+    S.camX += ((S.cartX - CFG.CART_SCREEN_X) - S.camX) * Math.min(1, dt * 4);
+    S.camY += ((S.cartY - CFG.CART_SCREEN_Y) - S.camY) * Math.min(1, dt * 4);
+    // Continual fireworks
+    if (Math.random() < dt * 3) {
+      spawnWinParticles();
+    }
+    if (S.inputLock <= 0 && jumpPressed) {
+      jumpPressed = false;
+      S.state = 'initials';
+      S.stateTime = 0;
+      S.inputLock = 0.25; // brief debounce so the same press doesn't auto-skip
+      S.initials = '';
+      return requestAnimationFrame(frame);
+    }
+    jumpPressed = false;
   }
 
-  // Compute interpolated render values
-  let renderCamX = S.camX, renderCartY = S.cartY;
+  let renderCartX = S.cartX, renderCartY = S.cartY, renderRot = S.cartRot;
   if (S.state === 'playing') {
     const alpha = Math.min(1, acc / CFG.STEP);
-    renderCamX = S.prevCamX + (S.camX - S.prevCamX) * alpha;
+    renderCartX = S.prevCartX + (S.cartX - S.prevCartX) * alpha;
     renderCartY = S.prevCartY + (S.cartY - S.prevCartY) * alpha;
+    renderRot = S.prevRot + (S.cartRot - S.prevRot) * alpha;
   }
 
-  // Render
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.fillStyle = CFG.C_BLACK;
+  ctx.fillStyle = CFG.C_BG_DEEP;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   const k = dpr * viewScale;
@@ -1133,54 +3527,83 @@ function frame(now) {
   const sy = S.shake > 0 ? (Math.random() - 0.5) * S.shake : 0;
   ctx.setTransform(k, 0, 0, k, dpr * offsetX + sx * k, dpr * offsetY + sy * k);
 
+  // Full canvas background (behind sidebars + game)
+  ctx.fillStyle = '#05040C';
+  ctx.fillRect(0, 0, CANVAS_W, CFG.H);
+
+  // Sidebars (drawn in canvas coords, outside the game clip)
+  if (sidebarMode) {
+    drawLeftSidebar();
+    drawRightSidebar();
+  }
+
+  // Enter game viewport: clip + translate
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(GAME_X, 0, CFG.W, CFG.H);
+  ctx.clip();
+  ctx.translate(GAME_X, 0);
+
+  drawBackground();
+  drawWalls();
+  drawSpikePit();
+  drawRails();
+  drawHazards();
+  drawPortals();
+  drawFinish();
+
   if (S.state === 'title') {
-    drawBackground(renderCamX);
-    drawRailFor(renderCamX);
-    drawCart(CFG.RAIL_Y, true);
+    drawCart(renderCartX - S.camX, renderCartY - S.camY, renderRot, false);
+    drawVignette();
     drawTitleOverlay();
-    drawMutedIndicator();
   } else if (S.state === 'playing') {
-    drawBackground(renderCamX);
-    drawRailFor(renderCamX);
-    drawEnemies(renderCamX);
-    drawCart(renderCartY, S.cartOnRail);
+    // Cart anchored to a fixed screen X — world scrolls past it — no horizontal shimmer
+    drawCart(CFG.CART_SCREEN_X, renderCartY - S.camY, renderRot, S.airborne);
     drawParticles();
+    drawVignette();
     drawHUD();
-    drawMutedIndicator();
   } else if (S.state === 'dying') {
-    drawBackground(renderCamX);
-    drawRailFor(renderCamX);
-    drawEnemies(renderCamX);
-    // cart only visible during freeze frame
-    if (S.freezeFrame > 0) drawCart(renderCartY, false);
+    // Draw cart frozen briefly, then ghost animation
+    if (S.freezeFrame > 0 || S.stateTime < 0.5) {
+      drawCart(renderCartX - S.camX, renderCartY - S.camY, renderRot, true);
+    }
+    drawGhost();
     drawParticles();
+    drawVignette();
     drawHUD();
-    drawMutedIndicator();
   } else if (S.state === 'over') {
-    drawBackground(renderCamX);
-    drawRailFor(renderCamX);
-    drawEnemies(renderCamX);
+    drawGhost();
     drawParticles();
+    drawVignette();
     drawHUD();
     drawGameOverOverlay();
-    drawMutedIndicator();
+  } else if (S.state === 'won') {
+    drawCart(renderCartX - S.camX, renderCartY - S.camY, renderRot, false);
+    drawParticles();
+    drawVignette();
+    drawHUD();
+    drawWinOverlay();
+  } else if (S.state === 'initials') {
+    drawCart(renderCartX - S.camX, renderCartY - S.camY, renderRot, false);
+    drawParticles();
+    drawVignette();
+    drawHUD();
+    drawInitialsOverlay();
   }
+
+  drawMutedIndicator();
+  ctx.restore();
 
   requestAnimationFrame(frame);
 }
 
-// Thin wrapper so earlier section isn't called before paint
-function drawRailFor(camX) { drawRail(camX); }
-
 // ============================================================
-// === BOOT ===================================================
+// BOOT
 // ============================================================
-initPatterns();
 enterTitle();
 requestAnimationFrame(frame);
 
-// Silently log to help debug but never throw
-window.addEventListener('error', e => { /* no console errors by design */ });
+window.addEventListener('error', () => {});
 
 })();
 </script>
